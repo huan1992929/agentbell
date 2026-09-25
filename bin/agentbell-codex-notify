@@ -1,0 +1,6 @@
+#!/bin/sh
+# All arguments, including turn-ended and the JSON argument, stay unchanged.
+exec 3<&0
+python3 "${0%/*}/agentbell-worker.py" notify "$@" <&3 3<&- &
+exec 3<&-
+exit 0

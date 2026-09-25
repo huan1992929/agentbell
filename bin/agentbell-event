@@ -1,0 +1,6 @@
+#!/bin/sh
+# Preserve hook stdin before starting a background process (POSIX sh may null it).
+exec 3<&0
+python3 "${0%/*}/agentbell-worker.py" event "$@" <&3 3<&- >/dev/null 2>&1 &
+exec 3<&-
+exit 0
