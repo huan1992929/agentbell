@@ -46,6 +46,17 @@ Claude 桌面端 hooks ──→ 事件脚本 ──┴──→ 事件文件 �
 
 清理前必须备份 `~/.claude/settings.json`。
 
+## 同类开源项目：Open Island
+
+`Octane0411/open-vibe-island`（GPL v3，SwiftUI + AppKit）做的是同一件事，而且更完整：13 个 agent、15+ 终端、刘海 UI、用量面板。**它是学习对象，不是可以直接抄代码的对象——GPL v3 具有传染性，复制其代码会强制本项目也变成 GPL v3。** 读思路可以，拷代码要先想清楚许可证。
+
+从它文档里得到的、对本项目有用的事实：
+
+- **Claude 桌面端**在"local agent mode"下以无 TTY 子进程运行，`ps` / `lsof` 看不到。可通过环境变量 `CLAUDE_CODE_ENTRYPOINT=claude-desktop` 识别（备用判据 `__CFBundleIdentifier=com.anthropic.claudefordesktop`）。
+- **存活判定要跟着 Claude.app 走**（`NSWorkspace.shared.runningApplications`），不能跟着终端进程。否则会话会在出现约 6 秒后被误判为已结束（他们的 issue #510）。做阶段 2 的"运行中"状态时必须注意这一点。
+- **桌面版 Codex** 可通过 `codex app-server` 的 JSON-RPC（stdio）拿到 `thread/started`、`turn/started`、`turn/completed`；点击会话可用 `codex://threads/<id>` 直接跳转。
+- 他们的 hook 设计原则同样是 **fail open**——Open Island 没运行时，agent 完全不受影响。与本项目一致。
+
 ## 网络限制
 
 huggingface.co、github.com 在这台机器上连不上（DNS 污染 + 端口封锁），没有配置任何代理。不要依赖需要从 GitHub 拉取的安装方式。

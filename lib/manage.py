@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -18,6 +20,10 @@ FILES = {'settings.json': HOME / '.claude/settings.json',
          'config.toml': HOME / '.codex/config.toml'}
 STATE = ROOT / 'install-state.json'
 VIBE = HOME / '.vibe-island'
+APP = ROOT / 'AgentBell.app'
+LABEL = 'local.agentbell.menubar'
+AGENT = HOME / 'Library/LaunchAgents' / (LABEL + '.plist')
+SERVICE = 'gui/' + str(os.getuid()) + '/' + LABEL
 HOOK = '/bin/sh -c \'"$HOME/.agentbell/bin/agentbell-event" claude >/dev/null 2>&1; exit 0\''
 
 
@@ -65,13 +71,13 @@ def restore(backup, manifest):
         shutil.move(str(backup / 'vibe-island'), VIBE)
 
 
-def install():
+def install_events():
     if STATE.exists() and read_json(STATE).get('active'):
         state = read_json(STATE)
         for name, path in FILES.items():
             if not path.exists() or digest(path.read_bytes()) != state['installed_sha256'][name]:
                 raise RuntimeError('Installed config changed; inspect before reinstalling: ' + str(path))
-        print('Already installed; original backup retained: ' + state['backup'])
+        print('Event scripts already installed; original backup retained: ' + state['backup'])
         return
     before = {name: path.read_bytes() if path.exists() else b'' for name, path in FILES.items()}
     settings = json.loads(before['settings.json'] or b'{}')
@@ -173,6 +179,101 @@ def install():
     print('Backup: ' + str(backup))
 
 
+def build_app(directory):
+    bundle = directory / 'AgentBell.app'
+    binary = bundle / 'Contents/MacOS/AgentBell'
+    binary.parent.mkdir(parents=True)
+    subprocess.run(['/usr/bin/swiftc', '-O', '-framework', 'AppKit',
+                    str(REPO / 'app/AgentBell.swift'), '-o', str(binary)], check=True)
+    atomic(bundle / 'Contents/Info.plist', plistlib.dumps({
+        'CFBundleExecutable': 'AgentBell', 'CFBundleIdentifier': LABEL,
+        'CFBundleName': 'AgentBell', 'CFBundlePackageType': 'APPL',
+        'CFBundleShortVersionString': '0.2.0', 'CFBundleVersion': '2',
+        'LSUIElement': True, 'LSMinimumSystemVersion': '13.0',
+    }))
+    subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(bundle)], check=True)
+    subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(bundle)], check=True)
+    return bundle
+
+
+def stop_app():
+    loaded = subprocess.run(['/bin/launchctl', 'print', SERVICE],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if loaded.returncode == 0:
+        subprocess.run(['/bin/launchctl', 'bootout', SERVICE], check=True)
+    # Also stop an instance opened manually after choosing Quit in the menu.
+    subprocess.run(['/usr/bin/pkill', '-f', '^' + re.escape(str(APP / 'Contents/MacOS/AgentBell')) + '$'],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def start_app():
+    subprocess.run(['/bin/launchctl', 'bootstrap', 'gui/' + str(os.getuid()), str(AGENT)], check=True)
+
+
+def install_menu(bundle):
+    state = read_json(STATE)
+    if not state.get('menu_installed') and (APP.exists() or AGENT.exists()):
+        raise RuntimeError('Unmanaged AgentBell App/LaunchAgent exists; refusing to overwrite')
+    # Keep the original pre-AgentBell restore point; this separate snapshot is
+    # the rollback point for an upgrade, including the stage 1 configuration.
+    backup = ROOT / 'backups' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+    backup.mkdir(parents=True, mode=0o700)
+    for name, path in FILES.items():
+        shutil.copy2(path, backup / name)
+    shutil.copy2(STATE, backup / 'install-state.json')
+    if AGENT.exists():
+        shutil.copy2(AGENT, backup / 'launchagent.plist')
+    if APP.exists():
+        shutil.copytree(APP, backup / 'AgentBell.app')
+    atomic(backup / 'upgrade.json', encoded({'kind': 'menu-upgrade', 'original_backup': state['backup']}))
+    settings = read_json(FILES['settings.json'])
+    groups = settings.setdefault('hooks', {}).setdefault('UserPromptSubmit', [])
+    if not any(h.get('command') == HOOK for g in groups for h in g.get('hooks', [])):
+        groups.append({'hooks': [{'type': 'command', 'command': HOOK}]})
+    try:
+        stop_app()
+        if APP.exists():
+            shutil.rmtree(APP)
+        shutil.copytree(bundle, APP)
+        atomic(AGENT, plistlib.dumps({
+            'Label': LABEL, 'ProgramArguments': [str(APP / 'Contents/MacOS/AgentBell')],
+            'RunAtLoad': True, 'LimitLoadToSessionType': 'Aqua',
+            'StandardOutPath': str(ROOT / 'logs/menubar.stdout.log'),
+            'StandardErrorPath': str(ROOT / 'logs/menubar.stderr.log'),
+        }))
+        atomic(FILES['settings.json'], encoded(settings), backup / 'settings.json')
+        start_app()
+        state['menu_installed'] = True
+        state['menu_backup'] = str(backup)
+        state['installed_sha256'] = {k: digest(p.read_bytes()) for k, p in FILES.items()}
+        atomic(STATE, encoded(state))
+    except Exception:
+        stop_app()
+        if APP.exists():
+            shutil.rmtree(APP)
+        AGENT.unlink(missing_ok=True)
+        for name, path in FILES.items():
+            atomic(path, (backup / name).read_bytes(), backup / name)
+        atomic(STATE, (backup / 'install-state.json').read_bytes())
+        if (backup / 'AgentBell.app').exists():
+            shutil.copytree(backup / 'AgentBell.app', APP)
+        if (backup / 'launchagent.plist').exists():
+            atomic(AGENT, (backup / 'launchagent.plist').read_bytes())
+            start_app()
+        raise
+    print('Menu bar App: ' + str(APP))
+    print('Login LaunchAgent: ' + str(AGENT))
+    print('Upgrade backup: ' + str(backup))
+
+
+def install():
+    # Compilation/signing must succeed before changing user configuration.
+    with tempfile.TemporaryDirectory(prefix='agentbell-build-') as directory:
+        bundle = build_app(Path(directory))
+        install_events()
+        install_menu(bundle)
+
+
 def uninstall():
     if not STATE.exists() or not read_json(STATE).get('active'):
         print('Not installed; logs and backups retained.')
@@ -184,7 +285,14 @@ def uninstall():
         if not path.exists() or digest(path.read_bytes()) != state['installed_sha256'][name]:
             raise RuntimeError('Config changed since installation; inspect before restoring: ' + str(path))
     restore(backup, read_json(backup / 'manifest.json'))
+    if state.get('menu_installed'):
+        stop_app()
+        AGENT.unlink(missing_ok=True)
+        if APP.exists():
+            shutil.rmtree(APP)
+        print('Removed menu bar App and login LaunchAgent.')
     state['active'] = False
+    state['menu_installed'] = False
     atomic(STATE, encoded(state))
     for path in FILES.values():
         print('Restored: ' + str(path))

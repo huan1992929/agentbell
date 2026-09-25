@@ -12,8 +12,23 @@
 - **依据**：用户答复本人始终以完全访问模式运行 Codex 与 Claude，权限请求实际不会触发。阶段 1 的真实 Claude 负载里 `permission_mode` 为 `auto`，与此一致。
 - **覆盖关系**：不替代既有决定。`PermissionRequest` hook 继续挂着——它零开销，万一以后改用受限模式就能直接用。
 
-## D003 Codex 侧无法获知"任务进行中"（2026-09-25，技术约束）
+## D003 Codex 侧无法获知"任务进行中"（2026-09-25，**已被 D004 推翻**）
 
 - **决定与范围**：菜单栏对 Codex 只显示"最近完成"，不显示"正在运行"。Claude 侧可通过加挂 `UserPromptSubmit` 获得开始信号，从而显示运行中与已运行时长。
 - **依据**：Codex 的 `notify` 只有 `turn-ended` 这一个回调点，没有对应的 turn-started。不为这个去轮询进程列表或解析终端，代价与收益不成比例。
 - **覆盖关系**：细化 `当前需求.md` 阶段 2 的"显示哪个 agent 在跑"，该描述对 Codex 不成立。
+
+## D004 Codex 有完整 hooks 系统，推翻 D003（2026-09-25，已确认）
+
+- **决定与范围**：Codex 侧同样可以显示"运行中 + 已运行时长"，与 Claude 侧对等。完全替代 D003。
+- **依据**：实测 Codex CLI 0.157.0 的二进制中存在完整 hook 事件常量：`SessionStart`(53) / `UserPromptSubmit`(18) / `TurnStarted`(20) / `PreToolUse`(55) / `PostToolUse`(42) / `SessionEnd`(33)、`hook_event_name`(27)，以及配置文件 `hooks.json` 与 `--dangerously-bypass-hook-trust` 命令行开关。另外 Open Island 的文档说明桌面版 Codex 还可通过 `codex app-server` 的 JSON-RPC 拿到 `thread/started`、`turn/started`、`turn/completed`。
+- **D003 错在哪**：它的依据来自**升级前的 CLI 0.77**，那时确实只有 `notify`。CLI 已在本轮升级到 0.157.0，但我把旧结论直接带进了新设计，没有重新验证。这正是 needs 规范第二节"外部原因被用来关闭功能时，先验证该依据本身"要防的情况。
+- **后续要求**：接入前先查清 `hooks.json` 的实际位置与格式，并确认它与现有 `notify` 串联是否冲突。**`notify` 串联不能动**——Codex Computer Use 仍依赖它，且阶段 1 已验证通过。仍然不挂 `PreToolUse` / `PostToolUse`。
+
+## D005 AgentBell 定位为个人极简版，不追功能广度（2026-09-25，已确认）
+
+- **决定与范围**：AgentBell 只服务本人的两个 agent（Codex、Claude 桌面端），只做"任务完成提醒 + 菜单栏状态"。**明确不做**：多 agent 广度支持、终端精准跳转、用量额度面板、刘海 UI、手机推送。
+- **依据**：用户在了解 `Octane0411/open-vibe-island`（GPL v3，13 agent、15+ 终端、刘海 UI、用量面板，可 `brew install --cask open-island`）之后，仍选择继续自建，并明确定位为"只给自己用的极简版"。想要完整体验时装 Open Island 即可，两者不冲突。
+- **刘海 UI 不做的具体理由**：实测用户主屏是 LG HDR 4K（无刘海，坐标原点在其上），MacBook 内建屏（刘海 185×32pt）是副屏。刘海 UI 在其主要视野之外，投入产出比不成立。
+- **许可证边界**：Open Island 是 GPL v3，**只读思路、不复制代码**。本项目保持自有实现，不引入 GPL 传染。
+- **覆盖关系**：收窄 `当前需求.md` 阶段 2 的范围；不影响 D001、D002、D004。
