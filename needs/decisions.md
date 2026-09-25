@@ -45,3 +45,14 @@
   - 内建屏刘海 185×32pt，`safeAreaInsets.top = 32`，`auxiliaryTopLeftArea` / `auxiliaryTopRightArea` 可用。
 - **仍然排除**（D005 其余部分继续有效）：多 agent 广度、终端精准跳转（终端里的 CLI 会话最多激活终端 App，不做 tab/split 定位）、用量额度面板、手机推送。
 - **许可证边界不变**：不复制 Open Island 的 GPL v3 代码，只读思路。
+
+## D007 接入 Codex app-server 以获取桌面版运行状态（2026-09-25，已确认）
+
+- **决定与范围**：允许新增一个与本地 `codex` app-server 通信的组件，用于获取 Codex **桌面版**的开始/结束事件。这是 D005"极简"定位下的必要例外，不是功能扩张。
+- **依据**：实测数据显示 `agent-turn-complete` 16 次而 `SessionStart` 仅 5 次——**Codex 桌面版不读 `~/.codex/hooks.json`**，只有 CLI 读。桌面版任务因此永远无法进入"运行中"，这是用户实际报告的缺陷（两个任务在跑只显示一个），不修则该场景始终不可用。
+- **已知可用线索**：
+  - `notify` 负载含 `thread-id`、`turn-id`、`cwd`，以及 `client` 字段（观察到取值 `"Codex Desktop"`），可据此区分来源并关联会话。
+  - `codex agents` 子命令的说明为"Browse all agent sessions on the shared local app-server daemon"，证实存在本地共享 app-server。
+  - Open Island 文档称桌面版 Codex 可通过 app-server 的 JSON-RPC 取得 `thread/started`、`turn/started`、`turn/completed`。**仅作思路参考，不复制其 GPL 代码。**
+- **附带缺陷**：`SessionStart` 比 `SessionEnd` 多一次，存在永不关闭的残留运行条目，需一并修复。
+- **覆盖关系**：放宽 D005 的"不新增组件"含义，不影响 D005 其余排除项（多 agent 广度、终端精准跳转、用量面板、手机推送仍不做）。
