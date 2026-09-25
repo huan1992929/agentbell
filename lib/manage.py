@@ -188,11 +188,11 @@ def build_app(directory):
     binary = bundle / 'Contents/MacOS/AgentBell'
     binary.parent.mkdir(parents=True)
     subprocess.run(['/usr/bin/swiftc', '-O', '-framework', 'AppKit',
-                    str(REPO / 'app/AgentBell.swift'), '-o', str(binary)], check=True)
+                    *[str(p) for p in sorted((REPO / 'app').glob('*.swift'))], '-o', str(binary)], check=True)
     atomic(bundle / 'Contents/Info.plist', plistlib.dumps({
         'CFBundleExecutable': 'AgentBell', 'CFBundleIdentifier': LABEL,
         'CFBundleName': 'AgentBell', 'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.2.0', 'CFBundleVersion': '2',
+        'CFBundleShortVersionString': '0.3.0', 'CFBundleVersion': '3',
         'LSUIElement': True, 'LSMinimumSystemVersion': '13.0',
     }))
     subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(bundle)], check=True)

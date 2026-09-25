@@ -2,6 +2,7 @@ import AppKit
 
 struct Running {
     let source: String
+    let session: String?
     let project: String
     let start: Date
     let prompt: String?
@@ -10,6 +11,7 @@ struct Running {
 
 struct Completion {
     let source: String
+    let session: String?
     let project: String
     let time: Date
     let summary: String
@@ -17,11 +19,13 @@ struct Completion {
 
 // Reads only the event script's append-only log. No notifications, subprocesses,
 // terminal inspection or network access belong in the presentation process.
+// Routing reads only identifier metadata, never transcript messages.
 final class EventStore {
     let url: URL
     var running: [String: Running] = [:]
     var recent: [Completion] = []
     var problem: String?
+    var clients: [String: String] = [:]
     private var offset: UInt64 = 0
     private var identity: UInt64?
     private var pending = Data()
@@ -47,6 +51,7 @@ final class EventStore {
                 running.removeAll()
                 recent.removeAll()
                 finishedTurns.removeAll()
+                clients.removeAll()
             }
             identity = inode
             problem = nil
@@ -107,6 +112,12 @@ final class EventStore {
         let key = session.map { source + ":" + $0 }
         let turnKey = key.flatMap { k in turn.map { k + ":" + $0 } }
         if let key {
+            if source == "codex" {
+                if let client = payload["client"] as? String { clients[key] = client }
+                if clients[key] == nil, let path = payload["transcript_path"] as? String {
+                    clients[key] = SessionNavigation.codexClient(path: path, session: session)
+                }
+            }
             if event == "UserPromptSubmit" {
                 // Steering can submit again inside the same prompt/turn.
                 if let turn, running[key]?.prompt == turn { return }
@@ -114,7 +125,7 @@ final class EventStore {
                 if turnKey.flatMap({ finishedTurns[$0] }) == nil,
                    running[key].map({ time >= $0.start }) ?? true {
                     let start = running[key].flatMap { $0.background ? $0.start : nil } ?? time
-                    running[key] = Running(source: label, project: project, start: start,
+                    running[key] = Running(source: label, session: session, project: project, start: start,
                                            prompt: turn, background: false)
                 }
                 return
@@ -124,7 +135,7 @@ final class EventStore {
             let tasks = payload["background_tasks"] as? [[String: Any]] ?? []
             if isClaude && tasks.contains(where: { $0["status"] as? String == "running" }) {
                 if running[key]?.prompt == nil || turn == nil || running[key]?.prompt == turn {
-                    running[key] = Running(source: label, project: project,
+                    running[key] = Running(source: label, session: session, project: project,
                                            start: running[key]?.start ?? time,
                                            prompt: turn, background: true)
                 }
@@ -152,105 +163,9 @@ final class EventStore {
         let lastLine = message.split(whereSeparator: \.isNewline).last.map(String.init) ?? "（无回复摘要）"
         let compact = lastLine.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let summary = String(compact.prefix(100)) + (compact.count > 100 ? "…" : "")
-        recent.append(Completion(source: isClaude ? "Claude" : "Codex", project: project,
+        recent.append(Completion(source: isClaude ? "Claude" : "Codex", session: session, project: project,
                                  time: time, summary: summary))
         recent.sort { $0.time > $1.time }
         recent = Array(recent.prefix(10))
     }
 }
-
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let store = EventStore(url: FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".agentbell/logs/events.jsonl"))
-    private var item: NSStatusItem!
-    private let menu = NSMenu()
-    private var timer: Timer?
-    private var signature = ""
-    private var runningItems: [(NSMenuItem, Running)] = []
-    private let clock: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MM-dd HH:mm:ss"
-        return formatter
-    }()
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // LaunchAgent and a manual open should share one menu bar instance.
-        let identifier = Bundle.main.bundleIdentifier ?? "local.agentbell.menubar"
-        if NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
-            .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
-            NSApp.terminate(nil)
-            return
-        }
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "AgentBell")
-        item.button?.image?.isTemplate = true
-        item.button?.toolTip = "AgentBell · 任务状态"
-        menu.autoenablesItems = false
-        menu.delegate = self
-        item.menu = menu
-        refresh()
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    func menuWillOpen(_ menu: NSMenu) { refresh() }
-
-    private func row(_ title: String, header: Bool = false) -> NSMenuItem {
-        let entry = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        entry.isEnabled = !header
-        menu.addItem(entry)
-        return entry
-    }
-
-    private func runningTitle(_ value: Running) -> String {
-        let seconds = max(0, Int(Date().timeIntervalSince(value.start)))
-        let elapsed = seconds >= 3600
-            ? String(format: "%d小时%02d分%02d秒", seconds / 3600, seconds / 60 % 60, seconds % 60)
-            : String(format: "%d分%02d秒", seconds / 60, seconds % 60)
-        return "\(value.source) · \(value.project) · \(elapsed)"
-    }
-
-    private func refresh() {
-        store.poll()
-        store.reconcileClaudeApp()
-        item.button?.title = store.running.isEmpty ? "" : " \(store.running.count)"
-        let running = store.running.sorted { $0.key < $1.key }
-        let next = running.map { "\($0.key):\($0.value.start.timeIntervalSince1970)" }.joined()
-            + store.recent.map { "\($0.source)\($0.project)\($0.time)\($0.summary)" }.joined()
-            + (store.problem ?? "")
-        if next != signature || menu.items.isEmpty {
-            signature = next
-            menu.removeAllItems()
-            runningItems.removeAll()
-            _ = row("运行中 · Claude / Codex", header: true)
-            if running.isEmpty { _ = row("暂无运行中的会话") }
-            for (_, value) in running {
-                runningItems.append((row(runningTitle(value)), value))
-            }
-            menu.addItem(.separator())
-            _ = row("最近完成 · Claude / Codex", header: true)
-            if store.recent.isEmpty { _ = row("暂无完成记录") }
-            for value in store.recent {
-                _ = row("\(value.source) · \(value.project) · \(clock.string(from: value.time))")
-                let summary = row(value.summary)
-                summary.indentationLevel = 1
-                summary.toolTip = value.summary
-            }
-            if let problem = store.problem { _ = row(problem, header: true) }
-            menu.addItem(.separator())
-            let quit = NSMenuItem(title: "退出 AgentBell", action: #selector(quitApp), keyEquivalent: "q")
-            quit.target = self
-            menu.addItem(quit)
-        }
-        for (entry, value) in runningItems { entry.title = runningTitle(value) }
-    }
-
-    @objc private func quitApp() { NSApp.terminate(nil) }
-}
-
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()

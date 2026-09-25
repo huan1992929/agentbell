@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-25T09:32:31Z",
+  "title": "Design System: AgentBell",
+  "extensions": {
+    "native": {
+      "platform": "macOS AppKit",
+      "appearance": "NSAppearance(named: .darkAqua)",
+      "source": "app/Island.swift",
+      "decision": "needs/decisions.md#D006",
+      "units": "AppKit logical points",
+      "colorInterpretation": "DESIGN.md preserves calibrated NSColor channel ratios; rendering remains managed by AppKit.",
+      "screenSelection": "NSEvent.mouseLocation selects the containing NSScreen, falling back to NSScreen.main; changing screens collapses the panel.",
+      "focus": "Nonactivating NSPanel; canBecomeKey and canBecomeMain are false. Custom views reject first responder and accept first mouse. Explicit task navigation may open another application.",
+      "verification": "User confirmed normal dual-screen following. Other behavior is documented from source, not claimed as an end-to-end acceptance result.",
+      "preview": "Native implementation only; no web component snippets or synthesized tonal ramps."
+    },
+    "shadows": [
+      {
+        "name": "system-panel-shadow",
+        "value": "NSPanel.hasShadow = true",
+        "purpose": "System-provided depth; no custom blur or offset values."
+      }
+    ],
+    "motion": [
+      { "name": "screen-and-hover-tick", "value": "0.12s", "purpose": "Re-evaluate screen geometry and mouse position." },
+      { "name": "outside-collapse-delay", "value": "0.35s", "purpose": "Collapse after the pointer leaves and the explicit-open hold expires." },
+      { "name": "explicit-open-hold", "value": "3s", "purpose": "Hold an explicit show open before pointer-exit collapse." },
+      { "name": "toggle-hover-suppression", "value": "0.6s", "purpose": "Avoid immediate hover reversal after clicking the capsule." },
+      { "name": "navigation-hover-suppression", "value": "1s", "purpose": "Avoid immediate reopening after selecting a task." },
+      { "name": "navigation-message-hold", "value": "6s", "purpose": "Show navigation feedback in the nonactivating expanded panel and defer automatic pointer-exit collapse; an explicit click or screen change can still collapse it." }
+    ]
+  },
+  "components": [],
+  "narrative": {
+    "overview": "依据 `needs/decisions.md` D006 与 `app/Island.swift` 记录已实现的 AppKit 界面。保留深色胶囊、低干扰状态提示和整行点击入口；尺寸单位均为 AppKit 逻辑点。用户已确认双屏跟随正常；这里的其余行为来自源码记录，不代替端到端验收。",
+    "dos": [
+      "Do 保持原生 AppKit、现有颜色、系统字体和真实状态；用鼠标屏幕与安全区域计算布局。",
+      "Do 区分源码实现记录、用户已确认的双屏表现与仍需单独验证的路由行为。"
+    ],
+    "donts": [
+      "Don't 加入网页界面、第三方依赖、生成图片或复制 Open Island 代码。",
+      "Don't 在设计样例中保存真实任务正文、会话标识或绝对家目录。"
+    ]
+  }
+}

@@ -2,6 +2,10 @@
 
 采用 needs 工作流规范 V5.1。
 
+## 阶段 3 当前状态（2026-09-25）
+
+D006 已实现。主界面为不激活的原生 NSPanel：LG 主屏顶部居中胶囊、内建屏贴刘海，鼠标跨屏跟随。菜单栏仅作显示与退出入口。用户已确认两屏显示、跟随、焦点及两种提示音；两边点击均已确认实际切到目标会话。Claude 深链正确参数为 `session=local_…`，通过桌面元数据 `cliSessionId → sessionId` 映射；Codex 桌面使用 `codex://threads/<id>`。定位失败明确退化，CLI 只激活终端。通知仍完全留在 `bin/`，详见 `progress.md` 最新记录。
+
 ## 目标
 
 **2026-09-25 阶段 2 校正**：以 `decisions.md` 的 D001/D002/D004/D005 为准。通知与声音留在事件脚本，App 仅显示状态。Codex CLI 实际为 0.157.0，用户级 `hooks.json` 已验证；`UserPromptSubmit` 标记每轮开始，`SessionStart` 仅标记会话生命周期，未识别同名 `TurnStarted` hook。详情见 `progress.md` 最新记录。下面旧环境/架构内容仅作历史背景，不覆盖这些决定。

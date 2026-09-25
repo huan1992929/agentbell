@@ -1,3 +1,42 @@
+## 2026-09-25 · 阶段 3 已实现并完成真实验收
+
+### 已完成与本轮边界
+
+- 按 D006 将菜单列表改成原生 AppKit 灵动岛；无刘海屏顶部居中、宽度随内容变化，内建屏根据 safe area 与辅助区域贴合刘海。鼠标跨屏时收起并跟随；悬停/点击展开运行中与最近 10 条完成记录。
+- 无边框 `.nonactivatingPanel`，禁止 key/main window，层级高于菜单栏，设置 Spaces / 全屏辅助 / transient / ignoresCycle，保留 LSUIElement。菜单栏只有“显示灵动岛”和退出。
+- 条目直接打开会话，不创建详情窗口。Claude 的原 `sessionId=<hook UUID>` 候选未定位成功；从本机处理代码确认正确格式为 `claude://code/continue?session=local_…`，并从桌面元数据精确映射 hook UUID。Codex 桌面为 `codex://threads/<id>`；CLI 只打开终端，未知来源或无 Claude 映射时明确退化。
+- Claude 只使用元数据中的会话 ID、归档标记；不解析聊天正文。Codex 为判断桌面/CLI，只解析事件指定且位于本地 sessions 目录中的 `session_meta` 首行，限 64 KiB。没有复制 Open Island 源码，没有第三方依赖、Xcode 工程、SPM、测试框架或 CI。
+- `bin/` 及 hook 定义完全未改；通知/声音仍由脚本发出。App 构建升级到 0.3.0，安装器只调整 Swift 多文件编译和版本。
+
+### 真实验收证据
+
+- **Claude 跳转**：Safari 深链测试先证实 hook UUID 不能直接导航；改用元数据里的桌面 ID 后，前台出现“AgentBell stage 2 acceptance”及原验收回复。随后从其他 Claude 会话点击灵动岛的阶段 3 完成条目，Computer Use 读到“AgentBell stage 3 acceptance”、对应 `local_…` 路由和 `AGENTBELL_STAGE3_CLAUDE_OK`。
+- **Codex 跳转**：先切到另一个已有任务，再实际点击灵动岛里本任务的 Codex 完成条目。Computer Use 禁止读取 Codex 自身界面，用户当场回复“已切回本会话”，据此确认精确跳转；未把协议投递成功当作界面成功。
+- **两屏及焦点**：本机几何再次读取，LG 2560×1440，内建屏 safe top 32pt、刘海间隙 185pt。用户回复“两块屏显示、跟随和焦点都正常”。胶囊收起、外屏展开、内建屏展开实拍保存在私有验证目录。
+- **真实任务回归**：新建 Claude 桌面验收会话，执行 sleep 25 后回复 `AGENTBELL_STAGE3_CLAUDE_OK`；真实 Codex CLI 执行 sleep 15 后回复 `AGENTBELL_STAGE3_CODEX_OK`。日志包含 Claude UserPromptSubmit / Stop（后台阶段保持运行）、Codex SessionStart / UserPromptSubmit / agent-turn-complete / SessionEnd。界面看到 Claude 后台运行中，最后两边均进入最近完成。
+- **声音**：用户回复“两种都听到了”，确认 Claude Glass 与 Codex Submarine。Computer Use 对浏览器、Claude、AgentBell 的读取与点击均成功；原 notify 串联与运行脚本未变。
+- **界面复核**：独立复核发现导航失败提示在收起后不可见且被秒级刷新覆盖，已改为非激活展开保留 6 秒；复核判定该问题 resolved。设置 darkAqua 使滚动条与深色面板一致。不扩大为全量测试。
+
+### 实际卸载、逐字节还原和重装
+
+- 执行 `./uninstall.sh`；`~/.claude/settings.json` 与 `~/.codex/config.toml` 分别逐字节等于 `~/.agentbell/backups/20260925-165844-580133/` 中的原始文件。
+- Codex hooks 恢复原先不存在的状态；App、进程、LaunchAgent 文件和已加载服务均已移除，日志与备份保留。
+- 随即执行 `./install.sh` 重装。上述两份配置和 `~/.codex/hooks.json` **逐字节等于本轮开始前**，包括原 `notify` 串联。脚本逐字节等于仓库版本。
+- 当前 App 已运行、LaunchAgent 已加载，ad-hoc 签名严格校验通过；安装状态 `active=true`、`menu_installed=true`。
+- **当前卸载还原基线**：`~/.agentbell/backups/20260925-173410-766815/`；**当前 hooks 还原快照**：`~/.agentbell/backups/20260925-173410-770884/`。
+
+### 私有证据与剩余边界
+
+证据仅存于 `~/.agentbell/verification/stage3/`：`real-events.json`、`codex-task.txt`、`uninstall-result.json`、`reinstall-result.json`、安装前配置快照与界面截图；不提交真实日志/会话 ID/正文到公开仓库。
+
+- 本轮要求的人工确认已取得：双屏、焦点、两种声音、Codex 精确会话切换。Claude 精确切换由实际 UI 读取得证。
+- 仍未重启/注销电脑，下次登录自启待确认；系统通知横幅和真实权限请求场景未额外验收。
+- Claude 内部元数据格式未来可能变化，届时只能打开 App；Codex 强制结束仍可能留下运行状态。来源不明（如部分子任务事件）只打开 Codex，不声称定位成功。
+- 阶段 1、2 原 Computer Use 客户端 IPC 错误保留为历史已知问题，本轮未更改或修复其实现；本轮 UI 操作正常。
+- 本轮变更提交推送到 main；远程同步以最终 Git 回查为准。
+
+---
+
 # 进展记录
 
 ## 2026-09-25 · 阶段 2 菜单栏与双端运行状态
