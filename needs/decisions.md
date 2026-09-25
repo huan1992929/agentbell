@@ -56,3 +56,13 @@
   - Open Island 文档称桌面版 Codex 可通过 app-server 的 JSON-RPC 取得 `thread/started`、`turn/started`、`turn/completed`。**仅作思路参考，不复制其 GPL 代码。**
 - **附带缺陷**：`SessionStart` 比 `SessionEnd` 多一次，存在永不关闭的残留运行条目，需一并修复。
 - **覆盖关系**：放宽 D005 的"不新增组件"含义，不影响 D005 其余排除项（多 agent 广度、终端精准跳转、用量面板、手机推送仍不做）。
+
+## D008 加入用量额度显示（仅 Codex）与 UI 打磨（2026-09-25，已确认）
+
+- **决定与范围**：推翻 D005 中"不做用量额度面板"这一条，但**只做 Codex**。同时对灵动岛做四项信息呈现的打磨。
+- **依据**：用量与"任务完成"属于同一类信息——用户想在不切窗口的前提下掌握的状态，而灵动岛已经存在，边际成本低。数据源也已现成：`CodexActivity` 本就在读 rollout 文件。
+- **已核实的数据源**：
+  - **Codex 可做**。rollout 的 `rate_limits` 结构为 `primary` / `secondary`，字段含 `used_percent`、`window_minutes`（观察到 10080 即 7 天）、`resets_at`（epoch 秒），另有 `plan_type`（观察到 `pro`）与 `credits`。
+  - **Claude 不可做**。`~/.claude/cache` 下只有 `model-catalog`；会话 JSONL 仅含每条消息的 `input_tokens` / `output_tokens`，**没有账号级配额窗口**。与 Open Island 文档一致：桌面端 headless 模式不渲染状态栏，因而不写用量缓存。
+- **硬要求**：Claude 用量必须显示为"不可用"或直接不显示。**不得用 token 累加估算冒充配额**——那不是账号级数据，是伪造。
+- **覆盖关系**：仅替代 D005 的"用量额度面板"一项。多 agent 广度、终端精准跳转、手机推送仍然不做。
