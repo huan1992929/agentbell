@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem!
     private var island: IslandController!
     private var timer: Timer?
+    private let codex = CodexActivityMonitor()
     func applicationDidFinishLaunching(_ notification: Notification) {
         let identifier = Bundle.main.bundleIdentifier ?? "local.agentbell.menubar"
         if NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
@@ -13,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         store.poll(); store.reconcileClaudeApp()
         island = IslandController(store: store)
+        codex.start { [weak self] activities, problem in
+            guard let self else { return }
+            self.store.reconcileCodex(activities, problem: problem)
+            self.island.refresh()
+            self.item.button?.title = self.store.running.isEmpty ? "" : " \(self.store.running.count)"
+        }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "bell", accessibilityDescription: "AgentBell")
         item.button?.image?.isTemplate = true
@@ -29,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.timer = timer; RunLoop.main.add(timer, forMode: .common)
     }
+    func applicationWillTerminate(_ notification: Notification) { codex.stop() }
     @objc private func showIsland() { island.show() }
     @objc private func quitApp() { NSApp.terminate(nil) }
 }

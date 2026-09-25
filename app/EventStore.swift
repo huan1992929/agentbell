@@ -17,15 +17,15 @@ struct Completion {
     let summary: String
 }
 
-// Reads only the event script's append-only log. No notifications, subprocesses,
-// terminal inspection or network access belong in the presentation process.
-// Routing reads only identifier metadata, never transcript messages.
+// Event scripts remain the only source of completion summaries and alerts.
+// Codex running state is reconciled separately from live lifecycle records.
 final class EventStore {
     let url: URL
     var running: [String: Running] = [:]
     var recent: [Completion] = []
     var problem: String?
     var clients: [String: String] = [:]
+    var codexProblem: String?
     private var offset: UInt64 = 0
     private var identity: UInt64?
     private var pending = Data()
@@ -79,6 +79,18 @@ final class EventStore {
         }
     }
 
+    func reconcileCodex(_ activities: [CodexActivity], problem: String?) {
+        codexProblem = problem
+        running = running.filter { $0.value.source != "Codex" }
+        for value in activities {
+            let key = "codex:" + value.session
+            clients[key] = value.client
+            guard finishedTurns[key + ":" + value.turn] == nil else { continue }
+            running[key] = Running(source: "Codex", session: value.session, project: value.project,
+                                   start: value.start, prompt: value.turn, background: false)
+        }
+    }
+
     func reconcileClaudeApp() {
         // Desktop local agents have no TTY. Never infer their lifetime from
         // terminal processes, lsof, or the absence of per-tool events.
@@ -118,7 +130,7 @@ final class EventStore {
                     clients[key] = SessionNavigation.codexClient(path: path, session: session)
                 }
             }
-            if event == "UserPromptSubmit" {
+            if source == "claude", event == "UserPromptSubmit" {
                 // Steering can submit again inside the same prompt/turn.
                 if let turn, running[key]?.prompt == turn { return }
                 // Ignore late starts for a turn already completed by notify.

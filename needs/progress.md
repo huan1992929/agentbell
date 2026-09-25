@@ -1,3 +1,44 @@
+## 2026-09-25 · D007 桌面 Codex 漏报与残留修复
+
+### 实际连接调查与采用的替代
+
+- 按 D007 修复，不重做规划，不复制 Open Island 源码。前几轮只证明了 CLI hooks、桌面完成事件与会话跳转，不能据此宣称桌面开始状态已覆盖；该验收缺口本轮纠正。
+- 核对本机 `codex agents --help`、`app-server proxy --help`、生成的协议 schema 和 [官方 app-server 文档](https://learn.chatgpt.com/docs/app-server)。默认共享控制 socket `~/.codex/app-server-control/app-server-control.sock` 不存在，`daemon version` 连接失败。
+- 桌面 App 持有独立 stdio app-server；只读启动一个独立 stdio 实例并调用 initialize / thread/loaded/list，返回空列表，无法观察桌面既有任务。没有为了接入去重启用户桌面服务、启动新共享 daemon、开放网络端口或变更 notify。
+- **未声称接通 RPC 订阅**。已验证替代为本地 app-server 写出的会话生命周期：`session_meta` 提供 id/source/originator/cwd；`event_msg` 的 `task_started` / `task_complete` / `turn_aborted` 提供 turn_id 与时间。正文与工具内容不用于判定，不复制到新日志。
+
+### 实现与残留清理
+
+- 新增 `app/CodexActivity.swift`，后台每 2 秒通过系统自带 lsof 发现 Codex 进程持有的会话**写入**句柄，限定本机 `.codex/sessions/` 路径。打开文件只证明存活，不被当成运行信号；明确 task_started 才进入运行中。
+- 首次读取元数据与尾部最新生命周期，之后增量读取；按会话和 turn_id 配对，晚到的旧 turn 完成不清除新 turn。已完成但文件仍打开的桌面会话保持空闲。
+- 不再从 Codex UserPromptSubmit 历史日志重建运行状态；Claude 原逻辑保持不变。notify 仍提供原来的完成摘要与提醒，并可及时清除对应完成条目。
+- task_complete / turn_aborted 清理；进程退出或会话写入句柄关闭，下次扫描清理。通过 macOS proc_pidinfo 读取实际进程启动时间，拒绝上一进程遗留的 task_started，避免重开旧文件复活残留。扫描失败显示状态暂不可确认，短暂保留旧快照，持续失败 10 秒后清除无依据的状态，不伪造完成事件。
+- 子代理与未知来源不当作额外用户任务计数。此方案没有“文件停止增长就算完成”或固定任务超时，因此长时间工具运行不会被误清除。
+
+### 必须实际跑出的并发验收：通过
+
+- 新建桌面任务“AgentBell D007 桌面并发验收”，执行 sleep 55 后返回 `AGENTBELL_D007_DESKTOP_DONE`；同时真实运行 CLI，在 `cli-check` 目录执行 sleep 105 后返回 `AGENTBELL_D007_CLI_DONE`。
+- Computer Use 读取并截图：两条任务同时处于运行中，分别标明桌面会话与终端入口。总数还包含本执行会话和用户另一个真实任务，不把这两条背景工作错误清掉。
+- 桌面任务先结束后，其运行条目消失、完成摘要出现，CLI 条目继续运行；CLI 随后独立消失并出现完成摘要。桌面任务没有 UserPromptSubmit 开始 hook，这次运行状态确实由生命周期组件取得。
+- 原残留的旧 turn 不再显示；同项目后来真实启动的新 turn 仍正常显示，以 turn_id 与开始时间区分，不按项目名粗暴删除。
+- 另启动独立 `crash-check` CLI，确认已进入运行中后，仅对该验收进程组 SIGKILL。真实事件日志仅有 SessionStart / UserPromptSubmit，**没有 SessionEnd / agent-turn-complete**；界面仍自动清除了它，其他任务保持显示。
+
+### 基础检查与生产状态
+
+- 用 swiftc 构建安装 0.3.1，App 已运行。`checks/main.swift` 是无框架的定向检查：初次遇到空文件后重试、跨读取边界、半行追加、晚到旧 turn、取消、缺少 SessionEnd、重启读取已完成会话、两个会话分别清理；使用生效的 precondition，全部通过。
+- `bin/` 未修改；运行脚本与仓库一致；Claude settings、Codex hooks、Codex config 最终逐字节等于本轮前快照，notify 串联未变。
+- 创建桌面验收任务时 Codex 自身增加了一条该临时项目的 trust 配置。已先备份，确认它是唯一语义差异，再移除该验收副作用，恢复原文件及安装器校验值；未覆盖其他用户配置。清理备份：`~/.agentbell/backups/20260925-175252-verification-cleanup/`。
+- 本轮首次 App 升级备份：`~/.agentbell/backups/20260925-174857-995319/`；其后两次补齐边界保护的升级备份也保存在同目录。卸载还原基线仍为 `20260925-173410-766815`，hooks 基线仍为 `20260925-173410-770884`。本轮未重复执行全量卸载回归。
+- 私有证据在 `~/.agentbell/verification/d007/`：并发 / 桌面先完成 / 两者均完成的 AX 与截图、强制结束前后 AX、真实事件与 CLI 输出、三份安装前配置。公开仓库不包含真实会话 ID、正文或家目录。
+
+### 已知边界
+
+- 这是已验证的本地记录替代，**不是共享 app-server 事件订阅**；正常状态更新间隔约 2 秒。未来 Codex 文件格式或句柄持有行为变化可能需要适配。
+- 扫描持续不可用时会清除失去依据的运行状态并提示不确定；不会把不确定状态谎报为任务完成。
+- 无新增通知、声音、PreToolUse/PostToolUse、第三方依赖、SPM、Xcode 工程、CI 或测试框架。并发及残留清理已直接取得 UI 证据，无需再让用户补做本轮验收。
+
+---
+
 ## 2026-09-25 · 阶段 3 已实现并完成真实验收
 
 ### 已完成与本轮边界

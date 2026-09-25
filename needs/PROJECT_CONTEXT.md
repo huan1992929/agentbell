@@ -2,6 +2,10 @@
 
 采用 needs 工作流规范 V5.1。
 
+## D007 缺陷修复当前状态（2026-09-25）
+
+桌面版不读 CLI hooks，原阶段 2/3 对 Codex 桌面“运行中”的推断错误。已改为独立 `CodexActivityMonitor`：每 2 秒发现 Codex 持有的会话写入句柄，只消费本地明确的 task_started / task_complete / turn_aborted 生命周期，按 turn_id 配对；完成和写入句柄消失均清理，不依赖 SessionEnd。本机共享 app-server socket 不存在，另起实例看不到桌面任务，因此采用已实测的本地记录替代，未声称接通 RPC 订阅。桌面 + CLI 并发及分别消失已在真实界面验证；notify、hooks 与声音发送方式未改。详见 progress 最新记录。
+
 ## 阶段 3 当前状态（2026-09-25）
 
 D006 已实现。主界面为不激活的原生 NSPanel：LG 主屏顶部居中胶囊、内建屏贴刘海，鼠标跨屏跟随。菜单栏仅作显示与退出入口。用户已确认两屏显示、跟随、焦点及两种提示音；两边点击均已确认实际切到目标会话。Claude 深链正确参数为 `session=local_…`，通过桌面元数据 `cliSessionId → sessionId` 映射；Codex 桌面使用 `codex://threads/<id>`。定位失败明确退化，CLI 只激活终端。通知仍完全留在 `bin/`，详见 `progress.md` 最新记录。

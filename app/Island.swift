@@ -266,7 +266,7 @@ final class IslandController {
         view.count = store.running.count
         let agents = Set(store.running.values.map(\.source)).sorted().joined(separator: " · ")
         view.status = store.running.isEmpty ? "AgentBell · 就绪" : "\(agents)  \(store.running.count)"
-        view.message = Date() < messageUntil ? transientMessage : store.problem
+        view.message = Date() < messageUntil ? transientMessage : (store.problem ?? store.codexProblem)
         let next = store.running.sorted { $0.key < $1.key }.map { "\($0.key)\($0.value.start)\($0.value.background)" }.joined()
             + store.recent.map { "\($0.source)\($0.session ?? "")\($0.time)\($0.summary)" }.joined()
             + store.clients.description
