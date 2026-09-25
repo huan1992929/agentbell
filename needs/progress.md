@@ -1,5 +1,42 @@
 # 进展记录
 
+## 2026-09-25 · 本轮真实验证与卸载重装
+
+### 当前生产状态
+
+- **已恢复安装，active=true**。两份配置与本轮卸载前逐字节一致；Claude 仍仅有 `Stop` / `Notification` / `PermissionRequest`，Codex 保留 `turn-ended` 串联。
+- 当前安装备份：`~/.agentbell/backups/20260925-155909-561129/`。它包含原始两份配置及重新归档的 `vibe-island` 目录。
+- 旧备份 `20260925-155211-033031/` 的两份配置仍保留；其中的 `vibe-island` 在卸载时移回原位、重装时移入新备份，**当前回退以 install-state.json 指向的新备份为准**。
+
+### 本轮实际验证
+
+1. **Codex CLI 真实任务**：CLI 0.157.0 完成算术任务，返回 `AGENTBELL_REAL_CODEX_20260925 323`，退出码 0。15:56:56 左右收到对应 `agent-turn-complete` 原始负载；观察到 `/usr/bin/afplay .../Submarine.aiff` 和 `osascript` 通知进程。用户在本轮明确回复“听到了”。
+2. **Computer Use 串联**：系统日志证实原 `SkyComputerUseClient` 收到了同一任务的 thread/turn 标识。任务完成后，Computer Use 实际完成了 Claude 界面读取、新会话点击、输入与发送。进程采样未捕获原客户端完整 argv，因此不将采样当作参数逐字节证明；参数透传依据仍为包装脚本与 worker 的实现。
+3. **Computer Use 已知限制**：原客户端在 CLI 完成通知时记录 `ComputerUseIPCClient.Error Code=0`。15:58:10 用该真实事件的同一参数直接调用原程序，退出码 0，但系统日志出现相同 IPC 错误。此错误直接调用也可复现，未发现串联新增故障；不宣称底层通知 IPC 无错误通过。
+4. **Claude 桌面端真实新会话**：通过 Code 页的 `New session in agentbell` 新建“AgentBell hooks 桌面会话验证”，发送无工具、无文件修改的任务；界面完成并回复 `AGENTBELL_REAL_CLAUDE_20260925_OK`。15:58:30（UTC+8）日志新增 `source: claude`、`hook_event_name: Stop`，`last_assistant_message` 与界面标记一致，`stdin_timed_out=false`。此前唯一 Claude 记录是 `smoke-test`，本次已取得真实新会话证据。**本机当前桌面版本确实触发 Stop hook**；未引入轮询。
+5. **卸载实测**：15:59:09 执行 `./uninstall.sh`，退出码 0；Python `read_bytes()` 比较两份恢复后的配置与旧备份，均为 `True`。`settings.json` 3564 字节，`config.toml` 18215 字节；Vibe Island 目录恢复，日志保留。
+6. **重新安装**：紧接着执行 `./install.sh`，退出码 0；重新移除 11 个 Vibe Island hooks 并归档目录。两份配置与卸载前的内存字节快照再次比较，均为 `True`。
+7. **基础检查**：shell 语法、Python AST 解析、`git diff --check` 通过；运行目录三个脚本与仓库逐字节一致。JSON/TOML 可解析，配置散列匹配安装记录，Codex 相对备份仅第 11 行变化，原 notify 数组保存在运行配置中；未生成 AgentBell `errors.log`。
+
+### 私有证据位置（不提交公开仓库）
+
+- `~/.agentbell/logs/events.jsonl`：两边真实原始事件。
+- `~/.agentbell/verification/codex-result.json`、`codex-task.log`：真实 CLI 结果及声音/通知进程采样。
+- `~/.agentbell/verification/computer-use-system.log`、`computer-use-direct.json`：串联和原程序直接调用的对照。
+- `~/.agentbell/verification/restore-result.json`：卸载、字节比对、重装及新备份位置。
+
+### 人工确认与已知问题
+
+- Codex 提示音已由用户确认；Claude 的 Glass 提示音、系统横幅显示，以及真实 `Notification` / `PermissionRequest` 场景尚未确认。
+- Computer Use 的 CLI 完成通知 IPC 错误如上，界面操作可用，但这项仍有底层错误；本轮未改其配置或实现。
+- 真实 CLI 启动仍出现 Linear 未认证、Figma OAuth、Playwright 握手失败和插件目录请求失败告警；任务本身成功，未越界修复这些配置。
+- 本轮运行脚本无需修改；只补充操作说明与验证记录。未新增单元测试框架、CI、全量回归、菜单栏或手机推送。
+- Git：保留既有 WIP `b67a313`，本轮文档另行提交并一并推送。远程同步结果以本轮最终回复和实际 Git 状态为准。
+
+---
+
+以下为上一轮历史记录；其中“未完成”条目由上方本轮记录更新。
+
 ## 2026-09-25 · 阶段 1 执行中被用户主动暂停
 
 ### 已完成
