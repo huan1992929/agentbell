@@ -14,9 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         store.poll(); store.reconcileClaudeApp()
         island = IslandController(store: store)
-        codex.start { [weak self] activities, problem in
+        codex.start { [weak self] activities, problem, usage in
             guard let self else { return }
             self.store.reconcileCodex(activities, problem: problem)
+            self.store.usage = usage
             self.island.refresh()
             self.item.button?.title = self.store.running.isEmpty ? "" : " \(self.store.running.count)"
         }

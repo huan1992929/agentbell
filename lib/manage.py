@@ -192,7 +192,7 @@ def build_app(directory):
     atomic(bundle / 'Contents/Info.plist', plistlib.dumps({
         'CFBundleExecutable': 'AgentBell', 'CFBundleIdentifier': LABEL,
         'CFBundleName': 'AgentBell', 'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.3.1', 'CFBundleVersion': '4',
+        'CFBundleShortVersionString': '0.5.0', 'CFBundleVersion': '5',
         'LSUIElement': True, 'LSMinimumSystemVersion': '13.0',
     }))
     subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(bundle)], check=True)

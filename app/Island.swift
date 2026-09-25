@@ -27,6 +27,7 @@ final class TaskRow: NSButton {
     var active = false
     var destination: Destination!
     var start: Date?
+    var completed: Date?
     var invoke: ((Destination) -> Void)?
     private var hovered = false
     override var isFlipped: Bool { true }
@@ -47,10 +48,9 @@ final class TaskRow: NSButton {
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
     @objc private func openRow() { invoke?(destination) }
     func updateElapsed() {
-        guard let start else { return }
-        let elapsed = max(0, Int(Date().timeIntervalSince(start)))
-        stamp = elapsed >= 3600 ? String(format: "%d:%02d:%02d", elapsed / 3600, elapsed / 60 % 60, elapsed % 60)
-            : String(format: "%d:%02d", elapsed / 60, elapsed % 60)
+        if let start { stamp = TaskTime.elapsed(start) }
+        else if let completed { stamp = TaskTime.completed(completed) }
+        setAccessibilityLabel("\(source) · \(project) · \(detail) · \(stamp) · \(destination.label)")
         needsDisplay = true
     }
     override func draw(_ dirtyRect: NSRect) {
@@ -62,14 +62,9 @@ final class TaskRow: NSButton {
         color.setFill()
         NSBezierPath(roundedRect: NSRect(x: 13, y: 16, width: 3, height: active ? 28 : 15), xRadius: 1.5, yRadius: 1.5).fill()
         text(source, in: NSRect(x: 27, y: 10, width: 56, height: 17), size: 12, color: color, weight: .semibold)
-        text(project, in: NSRect(x: 89, y: 10, width: bounds.width - 185, height: 18), size: 13, weight: .medium)
-        text(stamp, in: NSRect(x: bounds.width - 87, y: 10, width: 75, height: 17), size: 11, color: quiet, mono: true)
-        text(detail, in: NSRect(x: 27, y: 33, width: bounds.width - 47, height: 18), size: 12, color: quiet)
-        if hovered {
-            NSColor(calibratedWhite: 0.10, alpha: 1).setFill()
-            NSBezierPath(roundedRect: NSRect(x: 21, y: 30, width: bounds.width - 36, height: 22), xRadius: 5, yRadius: 5).fill()
-            text(destination.label + " ↗", in: NSRect(x: 27, y: 33, width: bounds.width - 47, height: 18), size: 12, color: ink)
-        }
+        text(project, in: NSRect(x: 89, y: 10, width: bounds.width - 219, height: 18), size: 13, weight: .medium)
+        text(stamp, in: NSRect(x: bounds.width - 120, y: 10, width: 108, height: 17), size: 11, color: quiet, mono: true)
+        text(detail, in: NSRect(x: 27, y: 29, width: bounds.width - 47, height: 18), size: 12, color: quiet)
     }
 }
 
@@ -80,6 +75,8 @@ final class IslandView: NSView {
     var count = 0
     var status = "一切就绪"
     var message: String?
+    var usage = "Codex 用量不可用"
+    var sourceMark = "CX"
     var toggle: (() -> Void)?
     let scroll = NSScrollView()
     let document = FlippedView()
@@ -118,10 +115,14 @@ final class IslandView: NSView {
             let y = notch + 15
             text("AgentBell", in: NSRect(x: 23, y: y, width: 160, height: 21), size: 16, weight: .semibold)
             text(count > 0 ? "\(count) 个进行中" : "一切就绪", in: NSRect(x: bounds.width - 125, y: y + 3, width: 100, height: 18), size: 12, color: count > 0 ? mint : quiet)
-            text(message ?? "点击条目打开 · 移开收起", in: NSRect(x: 23, y: bounds.height - 29, width: bounds.width - 46, height: 17), size: 11, color: quiet)
+            text(message ?? "点击条目打开 · 移开收起", in: NSRect(x: 23, y: bounds.height - 45, width: bounds.width - 46, height: 17), size: 11, color: quiet)
+            let available = bounds.width - 46
+            let measured = (usage as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
+            text(usage, in: NSRect(x: 23, y: bounds.height - 25, width: available, height: 17),
+                 size: min(11, max(9, 11 * available / max(1, measured))), color: quiet)
         } else if notch > 0 {
             let left = (bounds.width - notchWidth) / 2
-            drawDot(x: left - 32, y: notch / 2 - 3)
+            text(sourceMark, in: NSRect(x: left - 37, y: notch / 2 - 9, width: 30, height: 18), size: 12, color: mint, weight: .semibold)
             text(count > 0 ? "\(count)" : "✓", in: NSRect(x: (bounds.width + notchWidth) / 2 + 16, y: notch / 2 - 9, width: 32, height: 18), size: 12, color: count > 0 ? mint : quiet, mono: true)
         } else {
             drawDot(x: 16, y: 14)
@@ -135,7 +136,7 @@ final class IslandView: NSView {
     override func layout() {
         super.layout()
         scroll.isHidden = !expanded
-        scroll.frame = NSRect(x: 10, y: notch + 49, width: bounds.width - 20, height: max(0, bounds.height - notch - 88))
+        scroll.frame = NSRect(x: 10, y: notch + 49, width: bounds.width - 20, height: max(0, bounds.height - notch - 104))
         document.setFrameSize(NSSize(width: scroll.contentSize.width, height: document.frame.height))
         rows.forEach { $0.frame.size.width = scroll.contentSize.width }
     }
@@ -150,29 +151,28 @@ final class IslandView: NSView {
         let position = scroll.contentView.bounds.origin
         document.subviews.forEach { $0.removeFromSuperview() }; rows.removeAll()
         var y: CGFloat = 0
-        func add(source: String, session: String?, project: String, detail: String, stamp: String, start: Date? = nil) {
-            let row = TaskRow(frame: NSRect(x: 0, y: y, width: scroll.contentSize.width, height: 61))
+        func add(source: String, session: String?, project: String, detail: String, stamp: String, start: Date? = nil, completed: Date? = nil) {
+            let row = TaskRow(frame: NSRect(x: 0, y: y, width: scroll.contentSize.width, height: 52))
             row.source = source; row.project = project; row.detail = detail; row.stamp = stamp
-            row.start = start; row.active = start != nil
+            row.start = start; row.completed = completed; row.active = start != nil
             row.destination = navigation.destination(source: source, session: session,
                 client: session.flatMap { store.clients["codex:" + $0] })
             row.invoke = open
             row.toolTip = "\(source) · \(project)\n\(detail)\n\(row.destination.label)"
             row.setAccessibilityLabel("\(source) · \(project) · \(detail) · \(row.destination.label)")
-            row.updateElapsed(); document.addSubview(row); rows.append(row); y += 61
+            row.updateElapsed(); document.addSubview(row); rows.append(row); y += 52
         }
-        header("运行中", y: y); y += 31
-        if store.running.isEmpty { header("暂无运行中的任务", y: y); y += 37 }
+        header("运行中", y: y); y += 25
+        if store.running.isEmpty { header("暂无运行中的任务", y: y); y += 29 }
         for value in store.running.values.sorted(by: { $0.start < $1.start }) {
             add(source: value.source, session: value.session, project: value.project,
-                detail: value.background ? "后台任务仍在运行" : "正在处理", stamp: "", start: value.start)
+                detail: value.title, stamp: "", start: value.start)
         }
-        y += 5; header("最近完成", y: y); y += 31
-        if store.recent.isEmpty { header("完成后，摘要会出现在这里", y: y); y += 37 }
-        let formatter = DateFormatter(); formatter.dateFormat = "MM-dd HH:mm"
+        y += 5; header("最近完成", y: y); y += 25
+        if store.recent.isEmpty { header("完成后，任务会出现在这里", y: y); y += 29 }
         for value in store.recent {
             add(source: value.source, session: value.session, project: value.project,
-                detail: value.summary, stamp: formatter.string(from: value.time))
+                detail: value.summary, stamp: "", completed: value.time)
         }
         document.frame.size = NSSize(width: scroll.contentSize.width, height: y + 5)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(position.y, max(0, y - scroll.contentSize.height))))
@@ -237,9 +237,9 @@ final class IslandController {
         let notch = screen.safeAreaInsets.top
         let gap = max(0, (screen.auxiliaryTopRightArea?.minX ?? 0) - (screen.auxiliaryTopLeftArea?.maxX ?? 0))
         view.notch = notch; view.notchWidth = notch > 0 ? max(185, gap) : 0
-        let compactWidth = max(148, min(270, (view.status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width + 50))
-        let width: CGFloat = expanded ? min(420, screen.frame.width - 32) : (notch > 0 ? view.notchWidth + 108 : compactWidth)
-        let height: CGFloat = expanded ? min(580 + notch, screen.visibleFrame.height - 24) : max(34, notch)
+        let compactWidth = max(148, min(360, (view.status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width + 50))
+        let width: CGFloat = expanded ? min(460, screen.frame.width - 32) : (notch > 0 ? view.notchWidth + 108 : compactWidth)
+        let height: CGFloat = expanded ? min(max(230, min(480, view.document.frame.height + 104)) + notch, screen.visibleFrame.height - 24) : max(34, notch)
         let top = notch > 0 ? screen.frame.maxY : min(screen.visibleFrame.maxY, screen.frame.maxY - 24) - 7
         let frame = NSRect(x: screen.frame.midX - width / 2, y: top - height, width: width, height: height)
         if panel.frame != frame { panel.setFrame(frame, display: true); view.needsLayout = true }
@@ -264,10 +264,15 @@ final class IslandController {
     func refresh() {
         navigation.refresh()
         view.count = store.running.count
-        let agents = Set(store.running.values.map(\.source)).sorted().joined(separator: " · ")
-        view.status = store.running.isEmpty ? "AgentBell · 就绪" : "\(agents)  \(store.running.count)"
+        let current = store.running.values.sorted { $0.start > $1.start }.first
+        view.status = current.map { "\(store.running.count) 运行中 · \($0.title)" } ?? "AgentBell · 就绪"
+        let sources = Set(store.running.values.map(\.source))
+        view.sourceMark = sources.count > 1 ? "双" : (sources.first == "Claude" ? "CL" : "CX")
+        view.usage = store.usage?.label() ?? "Codex 用量不可用"
+        view.toolTip = view.usage
+        view.setAccessibilityLabel("AgentBell · " + view.status + " · " + view.usage)
         view.message = Date() < messageUntil ? transientMessage : (store.problem ?? store.codexProblem)
-        let next = store.running.sorted { $0.key < $1.key }.map { "\($0.key)\($0.value.start)\($0.value.background)" }.joined()
+        let next = store.running.sorted { $0.key < $1.key }.map { "\($0.key)\($0.value.start)\($0.value.background)\($0.value.title)" }.joined()
             + store.recent.map { "\($0.source)\($0.session ?? "")\($0.time)\($0.summary)" }.joined()
             + store.clients.description
         // Routing metadata may become available a few seconds after the first event.

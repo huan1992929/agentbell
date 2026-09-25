@@ -2,6 +2,10 @@
 
 采用 needs 工作流规范 V5.1。
 
+## 阶段 5 / D008 当前状态（2026-09-25）
+
+已安装 0.5.0：底部显示本地最新 Codex 配额窗口、已用比例和相对重置时间；Claude 不显示额度，绝不累加 token 估算。条目改用用户提示词标题，收起显示任务数量与标题，运行显示时长、完成显示相对时间，最近完成 5 条，面板最高 480pt。真实 Codex CLI / Claude 桌面任务的状态与标题、Claude 精确跳转、额度数值比对已通过；本轮声音与 Codex 精确跳转已发起人工确认，尚待回复。notify、bin 脚本与 hooks 配置未变。详见 progress 最新记录。
+
 ## D007 缺陷修复当前状态（2026-09-25）
 
 桌面版不读 CLI hooks，原阶段 2/3 对 Codex 桌面“运行中”的推断错误。已改为独立 `CodexActivityMonitor`：每 2 秒发现 Codex 持有的会话写入句柄，只消费本地明确的 task_started / task_complete / turn_aborted 生命周期，按 turn_id 配对；完成和写入句柄消失均清理，不依赖 SessionEnd。本机共享 app-server socket 不存在，另起实例看不到桌面任务，因此采用已实测的本地记录替代，未声称接通 RPC 订阅。桌面 + CLI 并发及分别消失已在真实界面验证；notify、hooks 与声音发送方式未改。详见 progress 最新记录。

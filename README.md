@@ -2,11 +2,11 @@
 
 macOS 上的本地 Agent 提醒工具，为 Codex CLI 和 Claude hooks 提供可区分的提示音与系统通知。
 
-阶段 3 提供 Swift 原生灵动岛：同时显示 Codex / Claude 的运行会话、项目、已运行时长和最近 10 条完成摘要，点击条目打开对应会话。无刘海屏使用顶部居中的浮动胶囊，有刘海屏贴合刘海，跟随鼠标所在屏幕。通知与声音仍由事件脚本发送，退出 App 后提醒仍可用。
+阶段 5 提供 Swift 原生灵动岛：同时显示 Codex / Claude 的运行会话、项目、已运行时长和最近 5 条完成任务标题，点击条目打开对应会话。无刘海屏使用顶部居中的浮动胶囊，有刘海屏贴合刘海，跟随鼠标所在屏幕。通知与声音仍由事件脚本发送，退出 App 后提醒仍可用。
 
 不使用网络服务，不安装第三方依赖。运行日志和用户配置仅保存在 `~/.agentbell/`，不提交到仓库。
 
-范围以 [`needs/decisions.md`](needs/decisions.md) 的 D001 / D002 / D004 / D005 / D006 / D007 为准。
+范围以 [`needs/decisions.md`](needs/decisions.md) 的 D001 / D002 / D004 / D005 / D006 / D007 / D008 为准。
 
 ## 使用
 
@@ -43,29 +43,41 @@ open ~/.agentbell/AgentBell.app
 当前采用已实测的本地替代：
 
 - 后台组件每 2 秒通过 macOS 自带 `lsof` 找到 **Codex 正在持有写入句柄**的本地会话文件；文件打开本身不等于任务运行中。
-- 只解释 `session_meta` 与 `event_msg` 的 `task_started` / `task_complete` / `turn_aborted` 标识、来源和时间，按会话及 `turn_id` 配对。不按文本生成、文件增长或静默时长推断状态，不保存/展示会话正文。
+- 只解释 `session_meta` 与 `event_msg` 的 `task_started` / `task_complete` / `turn_aborted` 标识、来源和时间，按会话及 `turn_id` 配对。不按文本生成、文件增长或静默时长推断状态，不使用助手回复或工具内容判断状态。
 - 首次从尾部寻找最新生命周期记录，以后增量读取。支持启动时接回正在运行的任务，已完成但仍被桌面 App 保持打开的会话不会重新出现。
 - 完成、取消、新一轮开始均更新状态；进程退出或关闭会话写入句柄后，下次扫描清除旧条目，不依赖 `SessionEnd`。另以系统进程启动时间排除上一进程遗留的开始记录，避免重新打开旧文件时复活残留。扫描失败会明确显示“状态暂不可确认”，最多保留旧快照 10 秒，之后清除失去依据的条目，不伪造完成通知。
 
-原 Codex hooks（SessionStart / UserPromptSubmit / SessionEnd / Interrupt）与 `notify` 原样保留。完成摘要、系统通知与声音仍只来自原事件脚本；App 的本地观察不会重复发送通知。Claude 的 hooks 与存活判断不变。没有添加 PreToolUse / PostToolUse。
+原 Codex hooks（SessionStart / UserPromptSubmit / SessionEnd / Interrupt）与 `notify` 原样保留。完成事件、系统通知与声音仍只来自原事件脚本；App 的本地观察不会重复发送通知。Claude 的 hooks 与存活判断不变。没有添加 PreToolUse / PostToolUse。
 
 [官方 app-server 文档](https://learn.chatgpt.com/docs/app-server) 描述了直接连接的状态通知；本机没有可观察桌面现有任务的共享服务，**当前实现不是 app-server RPC 订阅**。未来桌面暴露共享连接后可替换观察组件，界面和通知链无需改变。
 
 可选的单文件缺陷回归检查（无测试框架）：
 
 ```sh
-swiftc -framework AppKit app/CodexActivity.swift app/EventStore.swift app/SessionNavigation.swift checks/main.swift -o /tmp/agentbell-codex-check
+swiftc -framework AppKit app/TaskPresentation.swift app/CodexActivity.swift app/EventStore.swift app/SessionNavigation.swift checks/main.swift -o /tmp/agentbell-codex-check
 /tmp/agentbell-codex-check
 ```
+
+## 额度与任务信息（D008）
+
+展开态底部显示 Codex 最近一次 `rate_limits`：已用百分比、按实际 `window_minutes` 换算的窗口名、相对重置时间。primary / secondary 非空时都显示；没有记录显示不可用，重置时间已过但尚无新记录显示“待刷新”，不自行把用量归零。活动文件随状态每 2 秒读取，已关闭文件后台每 30 秒补查，启动也能恢复最近记录。额度随 Codex 写入更新，不是实时计费查询。
+
+**Claude 不显示用量**：没有可用的本地账号级配额窗口，未累加消息 token 或做任何估算。
+
+任务标题仅取用户提示词的首个非空行，最长 100 字。Codex 完成取 notify `input-messages` 中最近一条实际用户输入，运行中取本轮 rollout 的用户输入记录；Claude 取 `UserPromptSubmit.prompt`，后台任务通知沿用原始标题。去掉粘贴内容包装，纯文件路径显示文件名；缺少提示词如实显示“未记录任务提示词”，不回退到助手回复，也不解析会话正文。
+
+无刘海屏收起显示运行数量与最近启动的任务标题，长标题省略；刘海两侧空间有限，显示来源字标（CX / CL / 双）与数量。运行条目显示已运行时长，完成条目显示相对时间。最近完成最多 5 条；行高 52pt，展开面板根据内容收缩，普通屏最多 480pt 高（原 580pt）。并发多时仍可滚动。
 
 ## 点击会话
 
 - Claude：已实测 `claude://code/continue?session=local_…`。先在本地 `~/Library/Application Support/Claude/claude-code-sessions/` 的两层账户目录中读取元数据，按 `cliSessionId` 精确映射 `sessionId`；不使用项目名或时间猜配。映射缺失、重复或已归档时只打开 Claude，条目会明确说明无法定位。
 - Codex 桌面：已由用户确认点击条目后实际切到目标任务，格式为 `codex://threads/<id>`。
 - Codex CLI：只打开正在运行的 iTerm2 或 Terminal，不定位窗口、tab 或 split。客户端来源优先采用事件负载；开始事件缺失客户端字段时，只解析其 `transcript_path` 指向的本地 `session_meta` 首行（最多 64 KiB），检查会话 ID 与来源，不解析后续消息。来源不明只打开 Codex，并标注“来源未确认”。
-- 悬停条目显示实际操作，完整摘要可看 tooltip。无法启动 App 或深链投递失败时，非激活面板显示 6 秒提示；操作系统接收链接不被当成导航成功回执。
+- 悬停保留任务标题，实际打开目标见 tooltip 与辅助功能标签。无法启动 App 或深链投递失败时，非激活面板显示 6 秒提示；操作系统接收链接不被当成导航成功回执。
 
 ## 验证边界
+
+- D008：真实额度快照与 UI 一致（验收时 7天已用16%，secondary=null）；真实 Codex CLI 与新 Claude 桌面任务的提示词标题、并发运行 / 完成清除、相对时间及最近 5 条已检查；Claude 点击精确定位通过。本轮声音与 Codex 精确跳转已请求用户核对，尚待回复，不借用前轮确认。详细过程见 progress。
 
 - D007：已真实同时运行桌面任务与 CLI 任务，界面同时显示两条；桌面先完成后单独消失，CLI 继续运行，随后 CLI 也消失。原有用户任务保持显示。另实测强制结束一个 CLI，缺少 SessionEnd 和完成事件时条目仍自动清除。修复前的阶段 3 验收不足以证明桌面开始信号，以下历史结果不能替代这次并发验收。
 

@@ -7,7 +7,7 @@
       "platform": "macOS AppKit",
       "appearance": "NSAppearance(named: .darkAqua)",
       "source": "app/Island.swift",
-      "decision": "needs/decisions.md#D006",
+      "decision": "needs/decisions.md#D008",
       "units": "AppKit logical points",
       "colorInterpretation": "DESIGN.md preserves calibrated NSColor channel ratios; rendering remains managed by AppKit.",
       "screenSelection": "NSEvent.mouseLocation selects the containing NSScreen, falling back to NSScreen.main; changing screens collapses the panel.",
@@ -33,7 +33,7 @@
   },
   "components": [],
   "narrative": {
-    "overview": "依据 `needs/decisions.md` D006 与 `app/Island.swift` 记录已实现的 AppKit 界面。保留深色胶囊、低干扰状态提示和整行点击入口；尺寸单位均为 AppKit 逻辑点。用户已确认双屏跟随正常；这里的其余行为来自源码记录，不代替端到端验收。",
+    "overview": "依据 `needs/decisions.md` D006 / D008 与 `app/Island.swift` 记录已实现的 AppKit 界面。保留深色胶囊、低干扰状态提示和整行点击入口；尺寸单位均为 AppKit 逻辑点。用户已确认双屏跟随正常；这里的其余行为来自源码记录，不代替端到端验收。",
     "dos": [
       "Do 保持原生 AppKit、现有颜色、系统字体和真实状态；用鼠标屏幕与安全区域计算布局。",
       "Do 区分源码实现记录、用户已确认的双屏表现与仍需单独验证的路由行为。"

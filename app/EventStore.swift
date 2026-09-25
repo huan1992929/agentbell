@@ -7,6 +7,7 @@ struct Running {
     let start: Date
     let prompt: String?
     let background: Bool
+    var title: String = TaskText.missing
 }
 
 struct Completion {
@@ -17,7 +18,7 @@ struct Completion {
     let summary: String
 }
 
-// Event scripts remain the only source of completion summaries and alerts.
+// Event scripts remain the only source of completion records and alerts.
 // Codex running state is reconciled separately from live lifecycle records.
 final class EventStore {
     let url: URL
@@ -26,6 +27,9 @@ final class EventStore {
     var problem: String?
     var clients: [String: String] = [:]
     var codexProblem: String?
+    var usage: CodexUsage?
+    private var titles: [String: String] = [:]
+    private var titleOrder: [String] = []
     private var offset: UInt64 = 0
     private var identity: UInt64?
     private var pending = Data()
@@ -52,6 +56,7 @@ final class EventStore {
                 recent.removeAll()
                 finishedTurns.removeAll()
                 clients.removeAll()
+                titles.removeAll(); titleOrder.removeAll()
             }
             identity = inode
             problem = nil
@@ -87,7 +92,7 @@ final class EventStore {
             clients[key] = value.client
             guard finishedTurns[key + ":" + value.turn] == nil else { continue }
             running[key] = Running(source: "Codex", session: value.session, project: value.project,
-                                   start: value.start, prompt: value.turn, background: false)
+                                   start: value.start, prompt: value.turn, background: false, title: value.title)
         }
     }
 
@@ -131,6 +136,15 @@ final class EventStore {
                 }
             }
             if source == "claude", event == "UserPromptSubmit" {
+                let input = payload["prompt"] as? String ?? ""
+                let submittedTitle = TaskText.submitted(input) ? TaskText.title(input) : (running[key]?.title ?? titles[key])
+                if turnKey.flatMap({ titles[$0] }) == nil, let title = submittedTitle {
+                    for titleKey in Set([turnKey ?? key, key]) {
+                        if titles[titleKey] == nil { titleOrder.append(titleKey) }
+                        titles[titleKey] = title
+                    }
+                    while titleOrder.count > 512 { titles.removeValue(forKey: titleOrder.removeFirst()) }
+                }
                 // Steering can submit again inside the same prompt/turn.
                 if let turn, running[key]?.prompt == turn { return }
                 // Ignore late starts for a turn already completed by notify.
@@ -138,7 +152,7 @@ final class EventStore {
                    running[key].map({ time >= $0.start }) ?? true {
                     let start = running[key].flatMap { $0.background ? $0.start : nil } ?? time
                     running[key] = Running(source: label, session: session, project: project, start: start,
-                                           prompt: turn, background: false)
+                                           prompt: turn, background: false, title: titles[turnKey ?? key] ?? TaskText.missing)
                 }
                 return
             }
@@ -149,7 +163,7 @@ final class EventStore {
                 if running[key]?.prompt == nil || turn == nil || running[key]?.prompt == turn {
                     running[key] = Running(source: label, session: session, project: project,
                                            start: running[key]?.start ?? time,
-                                           prompt: turn, background: true)
+                                           prompt: turn, background: true, title: running[key]?.title ?? titles[turnKey ?? key] ?? TaskText.missing)
                 }
                 return
             }
@@ -171,13 +185,13 @@ final class EventStore {
             }
         }
         guard isClaude || isCodex else { return }
-        let message = payload[isClaude ? "last_assistant_message" : "last-assistant-message"] as? String ?? ""
-        let lastLine = message.split(whereSeparator: \.isNewline).last.map(String.init) ?? "（无回复摘要）"
-        let compact = lastLine.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let summary = String(compact.prefix(100)) + (compact.count > 100 ? "…" : "")
+        let inputs = payload["input-messages"] as? [String] ?? []
+        let summary = isCodex
+            ? inputs.last(where: { TaskText.submitted($0) }).flatMap { TaskText.title($0) } ?? TaskText.missing
+            : (turnKey ?? key).flatMap { titles[$0] } ?? TaskText.missing
         recent.append(Completion(source: isClaude ? "Claude" : "Codex", session: session, project: project,
                                  time: time, summary: summary))
         recent.sort { $0.time > $1.time }
-        recent = Array(recent.prefix(10))
+        recent = Array(recent.prefix(5))
     }
 }

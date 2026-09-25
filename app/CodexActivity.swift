@@ -7,6 +7,7 @@ struct CodexActivity {
     let project: String
     let start: Date
     let client: String
+    var title: String = TaskText.missing
 }
 
 // The desktop's private stdio server is not the CLI's shared daemon. Observe
@@ -23,6 +24,9 @@ final class CodexRollout {
     private var client: String?
     private var project = "未知项目"
     private(set) var activity: CodexActivity?
+    private(set) var usage: CodexUsage?
+    private var promptTitle: String?
+    private var promptTime: Date?
     private let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
@@ -39,17 +43,18 @@ final class CodexRollout {
         if identity != inode || size < offset || !headerReady {
             inode = identity; offset = 0; pending.removeAll(); activity = nil
             session = nil; client = nil; discarding = false; headerReady = false
-            // Read the metadata header and newest lifecycle marker once. Old,
-            // still-loaded desktop sessions can be tens of MB; never replay them.
+            usage = nil; promptTitle = nil; promptTime = nil
+            // Read backwards to the newest lifecycle and quota snapshot. Only
+            // input records after that lifecycle can supply the current title.
             let head = try file.read(upToCount: 65_536) ?? Data()
             guard let end = head.firstIndex(of: 10) else { return }
             headerReady = true
             metadata(Data(head.prefix(upTo: end)))
-            guard session != nil, client != nil else { offset = size; return }
+            guard session != nil else { offset = size; return }
             var boundary = size
             var suffix = Data()
             var found = false
-            while boundary > 0 && !found {
+            while boundary > 0 && (!found || usage == nil) {
                 let lower = boundary > 262_144 ? boundary - 262_144 : 0
                 try file.seek(toOffset: lower)
                 let chunk = try file.read(upToCount: Int(boundary - lower)) ?? Data()
@@ -60,7 +65,7 @@ final class CodexRollout {
                 if boundary == size { pending = Data(lines.last ?? Data.SubSequence()) }
                 if lower > 0 { usable = Array(usable.dropFirst()) }
                 for line in usable.reversed() {
-                    if consume(Data(line)) { found = true; break }
+                    if consume(Data(line), reverse: true, lifecycleFound: found) { found = true }
                 }
                 suffix = Data(lines.first ?? Data.SubSequence())
                 if lines.count > 1 { suffix.append(10) }
@@ -86,31 +91,55 @@ final class CodexRollout {
     private func metadata(_ data: Data) {
         guard let r = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               r["type"] as? String == "session_meta", let p = r["payload"] as? [String: Any],
-              let id = p["id"] as? String, UUID(uuidString: id) != nil,
-              let source = p["source"] as? String else { return }
+              let id = p["id"] as? String, UUID(uuidString: id) != nil else { return }
+        session = id
+        let source = p["source"] as? String
         if source == "exec" || source == "cli" { client = "codex_exec" }
         else if source == "vscode", p["originator"] as? String == "Codex Desktop" { client = "Codex Desktop" }
         else { return } // Subagents and unknown clients are not user task rows.
-        session = id
         if let cwd = p["cwd"] as? String { project = URL(fileURLWithPath: cwd).lastPathComponent }
     }
 
-    @discardableResult private func consume(_ data: Data) -> Bool {
-        // Cheap byte filter before parsing; never interpret messages mentioning
-        // these names as events. They must be top-level event_msg records.
+    @discardableResult private func consume(_ data: Data, reverse: Bool = false, lifecycleFound: Bool = false) -> Bool {
         guard let raw = String(data: data, encoding: .utf8),
-              raw.contains("\"task_started\"") || raw.contains("\"task_complete\"") || raw.contains("\"turn_aborted\""),
+              raw.contains("task_started") || raw.contains("task_complete") || raw.contains("turn_aborted")
+                || raw.contains("rate_limits") || raw.contains("input_text") || raw.contains("user_message"),
               let r = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              r["type"] as? String == "event_msg", let p = r["payload"] as? [String: Any],
-              let kind = p["type"] as? String,
-              ["task_started", "task_complete", "turn_aborted"].contains(kind),
-              let turn = p["turn_id"] as? String,
-              let session, let client else { return false }
+              let p = r["payload"] as? [String: Any], let stamp = r["timestamp"] as? String,
+              let date = fractional.date(from: stamp) ?? plain.date(from: stamp) else { return false }
+        let type = r["type"] as? String
+        let kind = p["type"] as? String
+        if type == "event_msg", kind == "token_count", let limits = p["rate_limits"] as? [String: Any],
+           usage.map({ date > $0.time }) ?? true, let snapshot = CodexUsage(payload: limits, time: date) {
+            usage = snapshot
+        }
+        // Explicit input records only. Do not inspect assistant or tool messages.
+        var prompt: String?
+        if type == "event_msg", kind == "user_message" { prompt = p["message"] as? String }
+        if type == "response_item", kind == "message", p["role"] as? String == "user" {
+            prompt = (p["content"] as? [[String: Any]])?.compactMap { item -> String? in
+                guard item["type"] as? String == "input_text", let value = item["text"] as? String,
+                      TaskText.submitted(value) else { return nil }
+                return value
+            }.first
+        }
+        if let prompt, TaskText.submitted(prompt), let title = TaskText.title(prompt) {
+            if reverse && !lifecycleFound {
+                promptTitle = title; promptTime = date
+            } else if !reverse, let active = activity, date >= active.start, promptTitle == nil {
+                promptTitle = title; promptTime = date; activity?.title = title
+            }
+        }
+        guard type == "event_msg", let kind, ["task_started", "task_complete", "turn_aborted"].contains(kind),
+              let turn = p["turn_id"] as? String, let session,
+              !(reverse && lifecycleFound) else { return false }
+        guard let client else { return true } // Quota-only sources never become task rows.
         if kind == "task_started" {
-            guard let stamp = r["timestamp"] as? String,
-                  let date = fractional.date(from: stamp) ?? plain.date(from: stamp) else { return false }
             if activity?.turn != turn {
-                activity = CodexActivity(session: session, turn: turn, project: project, start: date, client: client)
+                if !reverse { promptTitle = nil; promptTime = nil }
+                let title = promptTime.map { $0 >= date } == true ? promptTitle : nil
+                activity = CodexActivity(session: session, turn: turn, project: project, start: date,
+                                         client: client, title: title ?? TaskText.missing)
             }
         } else if activity == nil || activity?.turn == turn { activity = nil }
         return true
@@ -123,15 +152,19 @@ final class CodexActivityMonitor {
     private var readers: [String: CodexRollout] = [:]
     private var lastGood: [CodexActivity] = []
     private var failedSince: Date?
+    private(set) var usage: CodexUsage?
+    private var lastUsageScan = Date.distantPast
+    private var inspected: [String: Date] = [:]
     private let home = FileManager.default.homeDirectoryForCurrentUser
 
-    func start(deliver: @escaping ([CodexActivity], String?) -> Void) {
+    func start(deliver: @escaping ([CodexActivity], String?, CodexUsage?) -> Void) {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: 2)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let result = self.sample()
-            DispatchQueue.main.async { deliver(result.0, result.1) }
+            let usage = self.usage
+            DispatchQueue.main.async { deliver(result.0, result.1, usage) }
         }
         self.timer = timer; timer.resume()
     }
@@ -140,6 +173,7 @@ final class CodexActivityMonitor {
     // Internal for the standalone smoke check; never invoked on the UI thread.
     func sample() -> ([CodexActivity], String?) {
         do {
+            refreshUsageFiles()
             let paths = try writerPaths()
             readers = readers.filter { paths[$0.key] != nil }
             var result: [String: CodexActivity] = [:]
@@ -148,6 +182,7 @@ final class CodexActivityMonitor {
                 let reader = readers[path] ?? CodexRollout(url: URL(fileURLWithPath: path))
                 readers[path] = reader
                 do { try reader.poll() } catch { unreadable = true; continue }
+                acceptUsage(reader.usage)
                 if let value = reader.activity, value.start >= ownerStarted {
                     result[value.session] = value
                 }
@@ -160,6 +195,30 @@ final class CodexActivityMonitor {
             if failedSince == nil { failedSince = Date() }
             if Date().timeIntervalSince(failedSince!) >= 10 { lastGood.removeAll() }
             return (lastGood, "Codex 状态暂不可确认")
+        }
+    }
+
+    private func acceptUsage(_ value: CodexUsage?) {
+        if let value, usage.map({ value.time > $0.time }) ?? true { usage = value }
+    }
+
+    // Include completed/closed rollouts so quota survives app restarts and idle
+    // periods. Stat files at most every 30 seconds; parse only changed files that
+    // could contain a newer snapshot, on the background queue.
+    private func refreshUsageFiles() {
+        guard Date().timeIntervalSince(lastUsageScan) >= 30 else { return }
+        lastUsageScan = Date()
+        let root = home.appendingPathComponent(".codex/sessions")
+        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return }
+        var candidates: [(URL, Date)] = []
+        for case let url as URL in files where url.pathExtension == "jsonl" {
+            if let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+               date >= (usage?.time ?? .distantPast), inspected[url.path] != date { candidates.append((url, date)) }
+        }
+        for (url, date) in candidates.sorted(by: { $0.1 > $1.1 }) {
+            if date < (usage?.time ?? .distantPast) { break }
+            let reader = readers[url.path] ?? CodexRollout(url: url)
+            do { try reader.poll(); acceptUsage(reader.usage); inspected[url.path] = date } catch { continue }
         }
     }
 
