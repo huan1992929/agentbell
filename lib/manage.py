@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from codex_hooks import CodexHooks
 
 HOME = Path.home()
 ROOT = HOME / '.agentbell'
@@ -25,6 +26,9 @@ LABEL = 'local.agentbell.menubar'
 AGENT = HOME / 'Library/LaunchAgents' / (LABEL + '.plist')
 SERVICE = 'gui/' + str(os.getuid()) + '/' + LABEL
 HOOK = '/bin/sh -c \'"$HOME/.agentbell/bin/agentbell-event" claude >/dev/null 2>&1; exit 0\''
+CODEX_HOOK = HOOK.replace(' claude ', ' codex ')
+CODEX_HOOKS = HOME / '.codex/hooks.json'
+CODEX_EVENTS = ('SessionStart', 'UserPromptSubmit', 'SessionEnd', 'Interrupt')
 
 
 def read_json(path):
@@ -212,6 +216,9 @@ def start_app():
 
 def install_menu(bundle):
     state = read_json(STATE)
+    if state.get('codex_hooks_sha256') and (
+            not CODEX_HOOKS.exists() or digest(CODEX_HOOKS.read_bytes()) != state['codex_hooks_sha256']):
+        raise RuntimeError('Codex hooks changed since installation; inspect before upgrading')
     if not state.get('menu_installed') and (APP.exists() or AGENT.exists()):
         raise RuntimeError('Unmanaged AgentBell App/LaunchAgent exists; refusing to overwrite')
     # Keep the original pre-AgentBell restore point; this separate snapshot is
@@ -225,12 +232,36 @@ def install_menu(bundle):
         shutil.copy2(AGENT, backup / 'launchagent.plist')
     if APP.exists():
         shutil.copytree(APP, backup / 'AgentBell.app')
-    atomic(backup / 'upgrade.json', encoded({'kind': 'menu-upgrade', 'original_backup': state['backup']}))
+    hook_bytes = CODEX_HOOKS.read_bytes() if CODEX_HOOKS.exists() else b''
+    hook_snapshot = {'exists': CODEX_HOOKS.exists(), 'sha256': digest(hook_bytes)}
+    if CODEX_HOOKS.exists():
+        shutil.copy2(CODEX_HOOKS, backup / 'hooks.json')
+    atomic(backup / 'upgrade.json', encoded({'kind': 'menu-upgrade', 'original_backup': state['backup'],
+                                            'codex_hooks': hook_snapshot}))
+    codex_hooks = json.loads(hook_bytes or b'{}')
+    for event in CODEX_EVENTS:
+        entries = codex_hooks.setdefault('hooks', {}).setdefault(event, [])
+        if not any(h.get('command') == CODEX_HOOK for g in entries for h in g.get('hooks', [])):
+            entries.append({'hooks': [{'type': 'command', 'command': CODEX_HOOK, 'timeout': 1}]})
     settings = read_json(FILES['settings.json'])
     groups = settings.setdefault('hooks', {}).setdefault('UserPromptSubmit', [])
     if not any(h.get('command') == HOOK for g in groups for h in g.get('hooks', [])):
         groups.append({'hooks': [{'type': 'command', 'command': HOOK}]})
     try:
+        original_config = (backup / 'config.toml').read_bytes()
+        expected_config = tomllib.loads(original_config.decode())
+        atomic(CODEX_HOOKS, encoded(codex_hooks), backup / 'hooks.json')
+        with CodexHooks() as client:
+            trusted = client.trust(REPO, CODEX_HOOKS, CODEX_HOOK, FILES['config.toml'])
+        for hook in trusted:
+            expected_config.setdefault('hooks', {}).setdefault('state', {}).setdefault(
+                hook['key'], {})['trusted_hash'] = hook['currentHash']
+        current_config = FILES['config.toml'].read_bytes()
+        notify_lines = lambda content: [line for line in content.splitlines(keepends=True)
+                                        if re.match(rb'^\s*notify\s*=', line)]
+        if (tomllib.loads(current_config.decode()) != expected_config
+                or notify_lines(original_config) != notify_lines(current_config)):
+            raise RuntimeError('Codex trust update changed unrelated config or notify')
         stop_app()
         if APP.exists():
             shutil.rmtree(APP)
@@ -245,6 +276,8 @@ def install_menu(bundle):
         start_app()
         state['menu_installed'] = True
         state['menu_backup'] = str(backup)
+        state.setdefault('codex_hooks_backup', str(backup))
+        state['codex_hooks_sha256'] = digest(CODEX_HOOKS.read_bytes())
         state['installed_sha256'] = {k: digest(p.read_bytes()) for k, p in FILES.items()}
         atomic(STATE, encoded(state))
     except Exception:
@@ -254,6 +287,7 @@ def install_menu(bundle):
         AGENT.unlink(missing_ok=True)
         for name, path in FILES.items():
             atomic(path, (backup / name).read_bytes(), backup / name)
+        restore_hooks(backup)
         atomic(STATE, (backup / 'install-state.json').read_bytes())
         if (backup / 'AgentBell.app').exists():
             shutil.copytree(backup / 'AgentBell.app', APP)
@@ -264,6 +298,19 @@ def install_menu(bundle):
     print('Menu bar App: ' + str(APP))
     print('Login LaunchAgent: ' + str(AGENT))
     print('Upgrade backup: ' + str(backup))
+    print('Codex hooks trusted: ' + ', '.join(CODEX_EVENTS))
+
+
+def restore_hooks(backup, validate_only=False):
+    snapshot = read_json(backup / 'upgrade.json')['codex_hooks']
+    saved = backup / 'hooks.json'
+    if snapshot['exists'] and (not saved.exists() or digest(saved.read_bytes()) != snapshot['sha256']):
+        raise RuntimeError('Codex hooks backup checksum mismatch')
+    if not validate_only:
+        if snapshot['exists']:
+            atomic(CODEX_HOOKS, saved.read_bytes(), saved)
+        else:
+            CODEX_HOOKS.unlink(missing_ok=True)
 
 
 def install():
@@ -284,7 +331,13 @@ def uninstall():
     for name, path in FILES.items():
         if not path.exists() or digest(path.read_bytes()) != state['installed_sha256'][name]:
             raise RuntimeError('Config changed since installation; inspect before restoring: ' + str(path))
+    if state.get('codex_hooks_backup'):
+        if not CODEX_HOOKS.exists() or digest(CODEX_HOOKS.read_bytes()) != state['codex_hooks_sha256']:
+            raise RuntimeError('Codex hooks changed since installation; inspect before restoring')
+        restore_hooks(Path(state['codex_hooks_backup']), validate_only=True)
     restore(backup, read_json(backup / 'manifest.json'))
+    if state.get('codex_hooks_backup'):
+        restore_hooks(Path(state['codex_hooks_backup']))
     if state.get('menu_installed'):
         stop_app()
         AGENT.unlink(missing_ok=True)

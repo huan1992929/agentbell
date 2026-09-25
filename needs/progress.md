@@ -1,5 +1,47 @@
 # 进展记录
 
+## 2026-09-25 · 阶段 2 菜单栏与双端运行状态
+
+### 当前安装
+
+- 已安装并运行 `~/.agentbell/AgentBell.app`，`LSUIElement=true`，无 Dock 图标；用 Command Line Tools 的 `swiftc` 编译、手工组 bundle、ad-hoc 签名。
+- 登录项：`~/Library/LaunchAgents/local.agentbell.menubar.plist`，`RunAtLoad=true`。已验证 LaunchAgent 加载且进程运行；没有重启或注销用户电脑。
+- 当前完整卸载还原点：`~/.agentbell/backups/20260925-165844-580133/`。
+- 当前菜单栏/hooks 升级快照：`~/.agentbell/backups/20260925-165844-584512/`。Codex hooks 原先不存在，卸载应删除本轮创建的 `hooks.json`。
+- `install-state.json` 为 `active=true`、`menu_installed=true`。配置散列与安装记录一致。
+
+### 已核实的 hooks 机制与实现
+
+- 来源：[OpenAI Hooks 官方文档](https://learn.chatgpt.com/docs/hooks)、本机 Codex 0.157.0 生成的 app-server schema，以及临时 `CODEX_HOME` 中的隔离探针。
+- 用户级配置确为 `~/.codex/hooks.json`，结构为 `hooks → 事件名 → matcher 组 → hooks → type/command/timeout`。
+- 本机 `hooks/list` 返回 `SessionStart` / `UserPromptSubmit` / `SessionEnd` / `Interrupt` 的定义与真实 hash。`TurnStarted` 单独配置时返回零条 hooks；二进制常量不能作为可配置性的证明。
+- 按实际语义使用 `UserPromptSubmit` 作为每轮开始，`SessionStart` 仅记录生命周期；关闭和中断清除状态。完成继续来自原 `notify`，通过 session/thread 与 turn 标识关联。没有用 SessionStart 冒充持续运行。
+- 信任通过 `hooks/list` 获取真实 hash，使用 Codex `config/batchWrite` 写入四条自有定义的 `hooks.state.*.trusted_hash`，再次列表确认全部 `trusted`。不使用 bypass，不信任其他插件/项目的 hooks。配置写入前备份，写入后核对除预期信任项外的 TOML 语义与 `notify` 原行不变。
+- Claude 保留既有 `UserPromptSubmit`，仍挂 `Stop` / `Notification` / `PermissionRequest`；Codex 仅新增上面四个事件。没有新增 `PreToolUse` / `PostToolUse`。
+- 复用了前一轮的 Swift 菜单与增量日志读取结构，替换了仅显示 Claude 运行中的假设。两边运行中会话均显示来源、项目和时长，最近 10 条显示完成时刻与末条回复摘要。
+- Claude 存活仅跟随 `NSWorkspace.shared.runningApplications` 中的 Claude.app；退出/重新启动 App 会清除旧运行态，不检查 TTY、ps 或 lsof。处理真实桌面 `Stop` 中仍在运行的 `background_tasks`，保留运行态直到后续完成；同一 turn 的追加提示不重置计时。
+- D001/D002/D005 保持：`bin/` 中三个事件/通知脚本逐字节未变，App 不发通知、不播放声音；没有权限等待界面、刘海、用量、终端跳转或手机推送。未读取或复制 Open Island 的 GPL 实现。
+
+### 真实验证
+
+1. **Codex**：真实 CLI 任务收到 `SessionStart → UserPromptSubmit → agent-turn-complete → SessionEnd`，开始/结束的 session 与 turn 标识一致。用生产源码中的 EventStore 做同步只读观测，运行态连续采样到 25 秒，完成后消失并出现 `AGENTBELL_STAGE2_CODEX_STATE_OK` 摘要。
+2. **Claude 桌面新会话**：通过 Computer Use 新建 `AgentBell stage 2 acceptance`，实际执行一条 `sleep 25`。真实 `UserPromptSubmit` 后，运行态采样到 15 秒，未在约 6 秒被误判结束。桌面端把 sleep 转为后台任务后提前发出一个带 `background_tasks: running` 的 Stop，随后继续并返回最终 `AGENTBELL_STAGE2_CLAUDE_OK`；据此补齐背景任务保留逻辑。最终源码逐条重放这段真实事件，状态为 `运行 → 保持运行 → 保持运行 → 完成`，只产生一条最终完成摘要。
+3. **菜单与提示音**：用户明确确认“能看到，菜单已展开”和“听到了”。Computer Use 无法绑定无窗口的菜单栏 App（timeout），因此菜单视觉确认来自用户；运行状态的时序证据来自真实事件和同源状态读取器。
+4. **实际卸载**（16:58:40，UTC+8）：退出码 0；App 目录、LaunchAgent 文件、运行进程、launchd service 均已移除；两份 agent 配置与原备份逐字节相同，Codex hooks 恢复为原先不存在，日志保留。
+5. **重新安装**（16:58:44）：退出码 0；`settings.json`、`config.toml`、`hooks.json` 三份文件与卸载前快照逐字节相同；App 和 LaunchAgent 恢复运行。
+6. **重装回归**：真实 Codex 任务返回 `AGENTBELL_STAGE2_REINSTALL_OK 323`，退出码 0。进程采样捕获 `/usr/bin/afplay`、`osascript`，以及原 SkyComputerUseClient 的完整 argv，与真实 notify argv 完全一致。Computer Use 仍能读取、点击、输入和发送 Claude 桌面会话。
+7. **基础检查**：shell 语法、Python AST、Swift 编译、codesign strict 验签、两份 plist lint、`git diff --check` 均通过。运行目录事件脚本与仓库一致；hooks 信任回查全部为 trusted；未产生 AgentBell `errors.log`。没有搭建测试框架、CI 或全量回归。
+
+### 证据与人工确认
+
+- 私有证据在 `~/.agentbell/verification/stage2/`：`codex-events.json`、`claude-events.json`、`live-state.jsonl`、`restore-result.json`、`codex-result.json`、`computer-use-system.log`；不提交原始会话内容到公开仓库。
+- 登录自启已做配置与实际加载验证；**重启/注销后自动出现铃铛仍待下次登录人工确认**。
+- Codex 声音和菜单记录已由用户确认；Claude 声音、系统横幅、权限请求实际场景仍待确认。
+- 原 Computer Use 客户端在本轮 CLI 完成后仍记录 `ComputerUseIPCClient.Error Code=0`（17:00:03）。阶段 1 已确认直接调用也会复现；本轮串联完整参数已实测，未改其配置/实现，不宣称底层 IPC 无错误。
+- 强制杀死 Codex 可能缺少 SessionEnd/Interrupt，运行态可残留；没有引入进程轮询或会话文件推测。已有会话需新开以加载新增 hooks。
+
+---
+
 ## 2026-09-25 · 本轮真实验证与卸载重装
 
 ### 当前生产状态

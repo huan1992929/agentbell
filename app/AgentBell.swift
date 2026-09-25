@@ -1,9 +1,11 @@
 import AppKit
 
 struct Running {
+    let source: String
     let project: String
     let start: Date
     let prompt: String?
+    let background: Bool
 }
 
 struct Completion {
@@ -26,6 +28,7 @@ final class EventStore {
     private var discarding = false
     private let fractional = ISO8601DateFormatter()
     private let plain = ISO8601DateFormatter()
+    private var finishedTurns: [String: Date] = [:]
 
     init(url: URL) {
         self.url = url
@@ -43,6 +46,7 @@ final class EventStore {
                 discarding = false
                 running.removeAll()
                 recent.removeAll()
+                finishedTurns.removeAll()
             }
             identity = inode
             problem = nil
@@ -70,6 +74,20 @@ final class EventStore {
         }
     }
 
+    func reconcileClaudeApp() {
+        // Desktop local agents have no TTY. Never infer their lifetime from
+        // terminal processes, lsof, or the absence of per-tool events.
+        let applications = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == "com.anthropic.claudefordesktop" && !$0.isTerminated
+        }
+        running = running.filter { _, value in
+            guard value.source == "Claude" else { return true }
+            return applications.contains { app in
+                app.launchDate.map { value.start >= $0 } ?? true
+            }
+        }
+    }
+
     private func consume(_ line: Data) {
         guard let record = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
               let source = record["source"] as? String,
@@ -79,24 +97,56 @@ final class EventStore {
         let cwd = payload["cwd"] as? String ?? ""
         let project = cwd.isEmpty ? "未知项目" : URL(fileURLWithPath: cwd).lastPathComponent
         let event = payload["hook_event_name"] as? String
-        if source == "claude", let session = payload["session_id"] as? String {
+        let isClaude = source == "claude" && event == "Stop"
+        let isCodex = source == "codex" && payload["type"] as? String == "agent-turn-complete"
+        guard source == "claude" || source == "codex" else { return }
+        let label = source == "claude" ? "Claude" : "Codex"
+        let session = payload["session_id"] as? String ?? payload["thread-id"] as? String
+        let turn = payload[source == "claude" ? "prompt_id" : "turn_id"] as? String
+            ?? payload["turn-id"] as? String
+        let key = session.map { source + ":" + $0 }
+        let turnKey = key.flatMap { k in turn.map { k + ":" + $0 } }
+        if let key {
             if event == "UserPromptSubmit" {
-                running[session] = Running(project: project, start: time,
-                                           prompt: payload["prompt_id"] as? String)
+                // Steering can submit again inside the same prompt/turn.
+                if let turn, running[key]?.prompt == turn { return }
+                // Ignore late starts for a turn already completed by notify.
+                if turnKey.flatMap({ finishedTurns[$0] }) == nil,
+                   running[key].map({ time >= $0.start }) ?? true {
+                    let start = running[key].flatMap { $0.background ? $0.start : nil } ?? time
+                    running[key] = Running(source: label, project: project, start: start,
+                                           prompt: turn, background: false)
+                }
                 return
             }
-            if event == "Stop" {
-                let start = running[session]
-                let prompt = payload["prompt_id"] as? String
-                // A delayed Stop from a previous turn must not clear a newer turn.
-                if let start, time >= start.start,
-                   start.prompt == nil || prompt == nil || start.prompt == prompt {
-                    running.removeValue(forKey: session)
+            // A desktop Stop can arrive while its own background shell is still
+            // running. Preserve the session until the later completion turn.
+            let tasks = payload["background_tasks"] as? [[String: Any]] ?? []
+            if isClaude && tasks.contains(where: { $0["status"] as? String == "running" }) {
+                if running[key]?.prompt == nil || turn == nil || running[key]?.prompt == turn {
+                    running[key] = Running(source: label, project: project,
+                                           start: running[key]?.start ?? time,
+                                           prompt: turn, background: true)
+                }
+                return
+            }
+            // SessionStart is lifecycle metadata, not proof that a turn is running.
+            if event == "SessionEnd" {
+                if running[key].map({ time >= $0.start }) ?? false { running.removeValue(forKey: key) }
+                return
+            }
+            if isClaude || isCodex || event == "Interrupt" {
+                if let turnKey { finishedTurns[turnKey] = time }
+                if finishedTurns.count > 512 {
+                    let oldest = finishedTurns.min { $0.value < $1.value }!.key
+                    finishedTurns.removeValue(forKey: oldest)
+                }
+                if let start = running[key], time >= start.start,
+                   start.prompt == nil || turn == nil || start.prompt == turn {
+                    running.removeValue(forKey: key)
                 }
             }
         }
-        let isClaude = source == "claude" && event == "Stop"
-        let isCodex = source == "codex" && payload["type"] as? String == "agent-turn-complete"
         guard isClaude || isCodex else { return }
         let message = payload[isClaude ? "last_assistant_message" : "last-assistant-message"] as? String ?? ""
         let lastLine = message.split(whereSeparator: \.isNewline).last.map(String.init) ?? "（无回复摘要）"
@@ -158,11 +208,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let elapsed = seconds >= 3600
             ? String(format: "%d小时%02d分%02d秒", seconds / 3600, seconds / 60 % 60, seconds % 60)
             : String(format: "%d分%02d秒", seconds / 60, seconds % 60)
-        return "Claude · \(value.project) · \(elapsed)"
+        return "\(value.source) · \(value.project) · \(elapsed)"
     }
 
     private func refresh() {
         store.poll()
+        store.reconcileClaudeApp()
         item.button?.title = store.running.isEmpty ? "" : " \(store.running.count)"
         let running = store.running.sorted { $0.key < $1.key }
         let next = running.map { "\($0.key):\($0.value.start.timeIntervalSince1970)" }.joined()
@@ -172,8 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             signature = next
             menu.removeAllItems()
             runningItems.removeAll()
-            _ = row("Claude 运行中", header: true)
-            if running.isEmpty { _ = row("暂无运行中的 Claude 会话") }
+            _ = row("运行中 · Claude / Codex", header: true)
+            if running.isEmpty { _ = row("暂无运行中的会话") }
             for (_, value) in running {
                 runningItems.append((row(runningTitle(value)), value))
             }

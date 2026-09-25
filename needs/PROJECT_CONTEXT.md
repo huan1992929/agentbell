@@ -4,6 +4,8 @@
 
 ## 目标
 
+**2026-09-25 阶段 2 校正**：以 `decisions.md` 的 D001/D002/D004/D005 为准。通知与声音留在事件脚本，App 仅显示状态。Codex CLI 实际为 0.157.0，用户级 `hooks.json` 已验证；`UserPromptSubmit` 标记每轮开始，`SessionStart` 仅标记会话生命周期，未识别同名 `TurnStarted` hook。详情见 `progress.md` 最新记录。下面旧环境/架构内容仅作历史背景，不覆盖这些决定。
+
 Codex CLI 和 Claude 桌面端**任务完成或需要人处理时**，立刻发出系统通知 + 可区分的提示音；菜单栏常驻显示各 agent 当前状态。全本地运行，不联网，无账号。
 
 ## 运行环境（已核实，2026-09-25）
@@ -12,7 +14,7 @@ Codex CLI 和 Claude 桌面端**任务完成或需要人处理时**，立刻发�
 - Swift 6.4，`/usr/bin/swiftc`，仅装了 Command Line Tools（`/Library/Developer/CommandLineTools`），**没有完整 Xcode**
 - Python 3.13.2，**未装** rumps / pyobjc，所以菜单栏不走 Python 路线
 - **未装** terminal-notifier；`osascript` 可用
-- Codex CLI 0.77.0，装在 `/usr/local/bin/codex`（npm 全局，root 所有，升级需 sudo）
+- Codex CLI 0.157.0，当前使用 `~/.npm-global/bin/codex`；`/usr/local/bin/codex` 为保留的旧版
 - Claude 主要用**桌面端**（Claude.app 的 Code 标签），`claude` CLI **没有装**，PATH 里找不到
 
 ## 两个接入点
@@ -34,7 +36,7 @@ Claude 桌面端 hooks ──→ 事件脚本 ──┴──→ 事件文件 �
                                                       发通知 · 放声音 · 显示状态
 ```
 
-通知由常驻 App 统一发出：通知权限只需授权一次，图标和来源归属清晰。
+上图是早期设想，已被 D001 覆盖：事件脚本继续发通知与声音，常驻 App 仅消费事件日志显示状态。
 
 ## 历史包袱
 
@@ -59,17 +61,17 @@ Claude 桌面端 hooks ──→ 事件脚本 ──┴──→ 事件文件 �
 
 ## 网络限制
 
-huggingface.co、github.com 在这台机器上连不上（DNS 污染 + 端口封锁），没有配置任何代理。不要依赖需要从 GitHub 拉取的安装方式。
+早期曾遇到网络问题；阶段 1 已重新验证 GitHub 可访问并完成推送。安装和运行不下载第三方依赖。
 
 ## 常用命令
 
 ```bash
-# 阶段 0：装探针（会先备份配置）
-probe/install-probe.sh
+# 安装/升级菜单栏（先编译、备份配置）
+./install.sh
 
-# 阶段 0：看探针抓到什么
-tail -f probe/probe.log
+# 查看真实事件
+tail -f ~/.agentbell/logs/events.jsonl
 
 # 还原所有配置改动
-probe/uninstall-probe.sh
+./uninstall.sh
 ```
