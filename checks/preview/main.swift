@@ -12,7 +12,7 @@ func render(_ name: String, notch: CGFloat, active: Bool, unavailable: Bool = fa
         Completion(source: "Codex", session: "fixture-two", project: "知识库", time: now.addingTimeInterval(-7200), summary: "核对导入文档的标题与目录"),
         Completion(source: "Codex", session: "fixture-three", project: "知识库", time: now.addingTimeInterval(-90000), summary: "另一会话：整理检索提示词")]
     if active {
-        store.running["fixture-running"] = Running(source: "Codex", session: "fixture-running", project: "工作台", start: now.addingTimeInterval(-161), prompt: "fixture", background: false, title: "检查移动端信息层级，保留长任务说明在两行内可读，并能进入对应会话")
+        store.running["fixture-running"] = Running(source: "Codex", session: "fixture-running", project: "工作台", start: now.addingTimeInterval(-161), prompt: "fixture", background: false, title: "检查移动端信息层级，长任务说明单行截断但悬停可读，并能进入对应会话")
     }
     if !unavailable {
         store.usage = CodexUsage(payload: [
@@ -20,13 +20,13 @@ func render(_ name: String, notch: CGFloat, active: Bool, unavailable: Bool = fa
             "secondary": ["used_percent": 0.0, "window_minutes": 10080, "resets_at": now.addingTimeInterval(5 * 86400).timeIntervalSince1970] as [String: Any]], time: now.addingTimeInterval(-1800))
     }
     if !unavailable { precondition(store.usage?.windows.count == 2) }
-    let view = IslandView(frame: NSRect(x: 0, y: 0, width: 420, height: 400))
+    let view = IslandView(frame: NSRect(x: 0, y: 0, width: 520, height: 400))
     view.appearance = NSAppearance(named: .darkAqua)
     view.expanded = true; view.notch = notch; view.notchWidth = notch > 0 ? 185 : 0
     view.count = active ? 1 : 0; view.message = unavailable ? "暂时无法读取任务状态，请打开 Codex 查看" : nil
     view.quota.refresh(store.usage)
     view.rebuild(store: store, navigation: SessionNavigation(), open: { _ in })
-    view.setFrameSize(NSSize(width: 420, height: view.preferredHeight + notch))
+    view.setFrameSize(NSSize(width: 520, height: view.preferredHeight + notch))
     view.layoutSubtreeIfNeeded()
     let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
     view.cacheDisplay(in: view.bounds, to: rep)

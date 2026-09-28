@@ -4,7 +4,8 @@ import Foundation
 enum TaskText {
     static let missing = "未记录任务提示词"
     static func title(_ prompt: String?) -> String? {
-        guard let prompt else { return nil }
+        guard let rawPrompt = prompt else { return nil }
+        let prompt = userText(rawPrompt)
         if prompt.hasPrefix("# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions") {
             return "Codex 自动生成任务建议"
         }
@@ -28,8 +29,17 @@ enum TaskText {
     static func isHeartbeatTurn(_ inputs: [String]) -> Bool {
         inputs.last(where: { submitted($0) || isHeartbeat($0) }).map(isHeartbeat) ?? false
     }
+    // Attachment envelopes can contain the actual request after a dedicated marker.
+    static func userText(_ prompt: String) -> String {
+        if prompt.range(of: "^#{0,6} ?Files mentioned by (?:the )?user:", options: .regularExpression) != nil,
+           let marker = prompt.range(of: "## My request:\n") {
+            return String(prompt[marker.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return prompt
+    }
     static func submitted(_ prompt: String) -> Bool {
-        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = userText(prompt).trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.range(of: "^#{0,6} ?Files mentioned by (?:the )?user:", options: .regularExpression) != nil { return false }
         return !text.isEmpty && !isHeartbeat(text) && !["Files mentioned by the user:", "<in-app-browser-context", "<task-notification>", "<environment_context>", "<recommended_plugins>", "<send_user_message_question_reply>", "<permissions instructions>", "# AGENTS.md instructions"].contains { text.hasPrefix($0) }
     }
 }

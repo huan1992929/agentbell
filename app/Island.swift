@@ -71,7 +71,7 @@ final class TaskRow: NSButton {
         text(project, in: NSRect(x: 14, y: 8, width: bounds.width - 152, height: 19), size: 13, weight: active ? .semibold : .medium)
         text(stamp, in: NSRect(x: bounds.width - 132, y: 10, width: 106, height: 17), size: 11, color: active ? activeColor : quiet, mono: true)
         // The prompt remains legible on hover; the affordance doesn't replace it.
-        text(detail, in: NSRect(x: 14, y: 31, width: bounds.width - 44, height: 32), size: 12, color: quiet, wrap: true)
+        text(detail, in: NSRect(x: 14, y: 29, width: bounds.width - 44, height: 17), size: 12, color: quiet)
         if hovered { symbol("arrow.up.right", in: NSRect(x: bounds.width - 23, y: 10, width: 11, height: 11), color: ink) }
     }
 }
@@ -79,7 +79,7 @@ final class TaskRow: NSButton {
 final class QuotaView: NSView {
     var usage: CodexUsage?
     override var isFlipped: Bool { true }
-    var preferredHeight: CGFloat { 43 + CGFloat(max(1, usage?.windows.count ?? 0)) * 38 }
+    var preferredHeight: CGFloat { 30 + CGFloat(max(1, usage?.windows.count ?? 0)) * 24 }
     override init(frame: NSRect) {
         super.init(frame: frame); setAccessibilityElement(true); setAccessibilityRole(.group)
     }
@@ -95,21 +95,21 @@ final class QuotaView: NSView {
         text("Codex 用量", in: NSRect(x: 0, y: 13, width: 100, height: 17), size: 11, color: quiet, weight: .medium)
         text(usage?.freshness() ?? "暂无数据", in: NSRect(x: 124, y: 13, width: bounds.width - 124, height: 17), size: 10, color: quiet)
         guard let usage, !usage.windows.isEmpty else {
-            text("暂不可用", in: NSRect(x: 0, y: 39, width: bounds.width, height: 17), size: 12, color: quiet)
+            text("暂不可用", in: NSRect(x: 0, y: 32, width: bounds.width, height: 17), size: 12, color: quiet)
             return
         }
         for (index, window) in usage.windows.enumerated() {
-            let y = 38 + CGFloat(index) * 38
+            let y = 32 + CGFloat(index) * 24
             text(window.name, in: NSRect(x: 0, y: y, width: 66, height: 16), size: 11, color: quiet)
-            text(window.used, in: NSRect(x: 69, y: y - 1, width: 60, height: 18), size: 12, weight: .medium, mono: true)
-            text(window.resetLabel(), in: NSRect(x: 136, y: y, width: bounds.width - 136, height: 16), size: 11, color: quiet)
-            let track = NSRect(x: 0, y: y + 24, width: bounds.width, height: 2)
+            text(window.used, in: NSRect(x: 69, y: y - 1, width: 52, height: 18), size: 12, weight: .medium, mono: true)
+            text(window.resetLabel(), in: NSRect(x: bounds.width - 110, y: y, width: 110, height: 16), size: 11, color: quiet)
+            let track = NSRect(x: 128, y: y + 7, width: max(20, bounds.width - 252), height: 2)
             NSColor.white.withAlphaComponent(0.10).setFill(); NSBezierPath(roundedRect: track, xRadius: 1, yRadius: 1).fill()
             // No fill for 0%; unavailable data has no track at all.
             if window.percent > 0 {
                 let stale = Date() > window.reset || Date().timeIntervalSince(usage.time) > 900
                 (stale ? quiet : window.percent >= 90 ? attentionColor : NSColor(calibratedWhite: 0.78, alpha: 1)).setFill()
-                NSBezierPath(roundedRect: NSRect(x: 0, y: track.minY, width: max(1, track.width * min(100, window.percent) / 100), height: 2), xRadius: 1, yRadius: 1).fill()
+                NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY, width: max(1, track.width * min(100, window.percent) / 100), height: 2), xRadius: 1, yRadius: 1).fill()
             }
         }
     }
@@ -137,9 +137,10 @@ final class IslandView: NSView {
     let quota = QuotaView(frame: .zero)
     var rows: [TaskRow] = []
     var historyCount = 0
-    var footerHeight: CGFloat { quota.preferredHeight + 16 }
-    var headerHeight: CGFloat { message == nil ? 46 : 72 }
-    var preferredHeight: CGFloat { headerHeight + document.frame.height + footerHeight + (historyCount > 2 ? 30 : 0) }
+    var recentLimit: Int { count > 0 ? 1 : 2 }
+    var footerHeight: CGFloat { quota.preferredHeight + 12 }
+    var headerHeight: CGFloat { message == nil ? 44 : 70 }
+    var preferredHeight: CGFloat { headerHeight + document.frame.height + footerHeight + (historyCount > recentLimit ? 26 : 0) }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -173,7 +174,7 @@ final class IslandView: NSView {
         pinButton.contentTintColor = pinned ? ink : quiet
         pinButton.toolTip = pinned ? "取消固定，恢复移开收起" : "固定面板，移开鼠标也保持展开"
         pinButton.setAccessibilityLabel(pinned ? "取消固定" : "固定面板")
-        moreButton.title = showHistory ? "收起较早记录" : "再看 \(max(0, historyCount - 2)) 个会话"
+        moreButton.title = showHistory ? "收起较早记录" : "再看 \(max(0, historyCount - recentLimit)) 个会话"
         moreButton.setAccessibilityLabel(moreButton.title)
         needsLayout = true
     }
@@ -204,11 +205,11 @@ final class IslandView: NSView {
     }
     override func layout() {
         super.layout()
-        let moreHeight: CGFloat = historyCount > 2 ? 30 : 0
+        let moreHeight: CGFloat = historyCount > recentLimit ? 26 : 0
         let bodyHeight = max(0, bounds.height - notch - headerHeight - footerHeight - moreHeight)
         scroll.isHidden = !expanded; quota.isHidden = !expanded
         pinButton.isHidden = !expanded; closeButton.isHidden = !expanded
-        moreButton.isHidden = !expanded || historyCount <= 2
+        moreButton.isHidden = !expanded || historyCount <= recentLimit
         attentionButton.isHidden = !expanded || message == nil
         attentionButton.frame = NSRect(x: bounds.width - 104, y: notch + 36, width: 86, height: 28)
         pinButton.frame = NSRect(x: bounds.width - 78, y: notch + 9, width: 28, height: 28)
@@ -229,11 +230,11 @@ final class IslandView: NSView {
         document.subviews.forEach { $0.removeFromSuperview() }; rows.removeAll()
         var y: CGFloat = 0
         func add(session: String?, project: String, title: String, start: Date? = nil, completed: Date? = nil) {
-            let row = TaskRow(frame: NSRect(x: 0, y: y, width: scroll.contentSize.width, height: 68))
+            let row = TaskRow(frame: NSRect(x: 0, y: y, width: scroll.contentSize.width, height: 52))
             row.project = project; row.detail = title; row.start = start; row.completed = completed; row.active = start != nil
             row.destination = navigation.destination(source: "Codex", session: session, client: session.flatMap { store.clients["codex:" + $0] })
             row.invoke = open; row.toolTip = "\(project)\n\(title)\n\(row.destination.label)"
-            row.updateElapsed(); document.addSubview(row); rows.append(row); y += 68
+            row.updateElapsed(); document.addSubview(row); rows.append(row); y += 52
         }
         let running = store.running.values.filter { $0.source == "Codex" }.sorted { $0.start > $1.start }
         for value in running { add(session: value.session, project: value.project, title: value.title, start: value.start) }
@@ -244,8 +245,8 @@ final class IslandView: NSView {
         historyCount = recent.count
         if !recent.isEmpty {
             if !running.isEmpty { y += 8 }
-            header("最近结束", y: y); y += 28
-            for value in recent.prefix(showHistory ? 5 : 2) {
+            header("最近结束", y: y); y += 24
+            for value in recent.prefix(showHistory ? 5 : recentLimit) {
                 add(session: value.session, project: value.project, title: value.summary, completed: value.time)
             }
         } else if running.isEmpty {
@@ -337,7 +338,7 @@ final class IslandController {
         let gap = max(0, (screen.auxiliaryTopRightArea?.minX ?? 0) - (screen.auxiliaryTopLeftArea?.maxX ?? 0))
         view.notch = notch; view.notchWidth = notch > 0 ? max(185, gap) : 0
         let compactWidth = max(148, min(360, (view.status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width + 50))
-        let width: CGFloat = expanded ? min(420, screen.frame.width - 32) : (notch > 0 ? view.notchWidth + 108 : compactWidth)
+        let width: CGFloat = expanded ? min(520, screen.frame.width - 32) : (notch > 0 ? view.notchWidth + 108 : compactWidth)
         let height: CGFloat = expanded ? min(max(180, min(520, view.preferredHeight)) + notch, screen.visibleFrame.height - 24) : max(34, notch)
         let top = notch > 0 ? screen.frame.maxY : min(screen.visibleFrame.maxY, screen.frame.maxY - 24) - 7
         let frame = NSRect(x: screen.frame.midX - width / 2, y: top - height, width: width, height: height)

@@ -145,3 +145,6 @@ precondition(!TaskText.submitted("Files mentioned by the user:\n<file>"))
 precondition(TaskText.title("# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions for what this user can do") == "Codex 自动生成任务建议")
 precondition(!TaskText.submitted("<in-app-browser-context source=\"ambient-ui-state\">\ncontext"))
 precondition(TaskText.title("<unknown-internal-envelope>\nmetadata") == nil)
+
+precondition(TaskText.title("# Files mentioned by the user:\nfile.png\n## My request:\n让面板更宽") == "让面板更宽")
+precondition(!TaskText.submitted("# Files mentioned by the user:\nfile.png"))
