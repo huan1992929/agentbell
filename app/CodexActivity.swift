@@ -8,6 +8,7 @@ struct CodexActivity {
     let start: Date
     let client: String
     var title: String = TaskText.missing
+    var isHeartbeat = false
 }
 
 // The desktop's private stdio server is not the CLI's shared daemon. Observe
@@ -27,6 +28,7 @@ final class CodexRollout {
     private(set) var usage: CodexUsage?
     private var promptTitle: String?
     private var promptTime: Date?
+    private var heartbeat = false
     private let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
@@ -43,7 +45,7 @@ final class CodexRollout {
         if identity != inode || size < offset || !headerReady {
             inode = identity; offset = 0; pending.removeAll(); activity = nil
             session = nil; client = nil; discarding = false; headerReady = false
-            usage = nil; promptTitle = nil; promptTime = nil
+            usage = nil; promptTitle = nil; promptTime = nil; heartbeat = false
             // Read backwards to the newest lifecycle and quota snapshot. Only
             // input records after that lifecycle can supply the current title.
             let head = try file.read(upToCount: 65_536) ?? Data()
@@ -119,15 +121,18 @@ final class CodexRollout {
         if type == "response_item", kind == "message", p["role"] as? String == "user" {
             prompt = (p["content"] as? [[String: Any]])?.compactMap { item -> String? in
                 guard item["type"] as? String == "input_text", let value = item["text"] as? String,
-                      TaskText.submitted(value) else { return nil }
+                      TaskText.submitted(value) || TaskText.isHeartbeat(value) else { return nil }
                 return value
             }.first
         }
-        if let prompt, TaskText.submitted(prompt), let title = TaskText.title(prompt) {
+        if let prompt, TaskText.submitted(prompt) || TaskText.isHeartbeat(prompt) {
+            let title = TaskText.title(prompt) ?? TaskText.missing
+            let isHeartbeat = TaskText.isHeartbeat(prompt)
             if reverse && !lifecycleFound {
-                promptTitle = title; promptTime = date
+                promptTitle = title; promptTime = date; heartbeat = isHeartbeat
             } else if !reverse, let active = activity, date >= active.start, promptTitle == nil {
-                promptTitle = title; promptTime = date; activity?.title = title
+                promptTitle = title; promptTime = date; heartbeat = isHeartbeat
+                activity?.title = title; activity?.isHeartbeat = isHeartbeat
             }
         }
         guard type == "event_msg", let kind, ["task_started", "task_complete", "turn_aborted"].contains(kind),
@@ -136,10 +141,10 @@ final class CodexRollout {
         guard let client else { return true } // Quota-only sources never become task rows.
         if kind == "task_started" {
             if activity?.turn != turn {
-                if !reverse { promptTitle = nil; promptTime = nil }
+                if !reverse { promptTitle = nil; promptTime = nil; heartbeat = false }
                 let title = promptTime.map { $0 >= date } == true ? promptTitle : nil
                 activity = CodexActivity(session: session, turn: turn, project: project, start: date,
-                                         client: client, title: title ?? TaskText.missing)
+                                         client: client, title: title ?? TaskText.missing, isHeartbeat: heartbeat)
             }
         } else if activity == nil || activity?.turn == turn { activity = nil }
         return true
@@ -183,7 +188,7 @@ final class CodexActivityMonitor {
                 readers[path] = reader
                 do { try reader.poll() } catch { unreadable = true; continue }
                 acceptUsage(reader.usage)
-                if let value = reader.activity, value.start >= ownerStarted {
+                if let value = reader.activity, !value.isHeartbeat, value.start >= ownerStarted {
                     result[value.session] = value
                 }
             }

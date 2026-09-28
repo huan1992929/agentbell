@@ -4,6 +4,7 @@ import datetime
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import select
 import subprocess
@@ -51,6 +52,20 @@ def launch(command, inherit=False):
     return subprocess.Popen(command, start_new_session=True, close_fds=True, **options)
 
 
+def heartbeat(payload):
+    """Only an actual heartbeat envelope, never a mention inside a user request."""
+    inputs = payload.get('input-messages', [])
+    if not isinstance(inputs, list):
+        return False
+    transport = ('Files mentioned by the user:', '<in-app-browser-context', '<task-notification>', '<environment_context>', '<recommended_plugins>',
+                 '<send_user_message_question_reply>', '<permissions instructions>', '# AGENTS.md instructions')
+    for item in reversed(inputs):
+        if not isinstance(item, str) or not item.strip() or item.lstrip().startswith(transport):
+            continue
+        return re.match(r'^<heartbeat(?:\s[^>]*)?>', item.strip()) is not None
+    return False
+
+
 def main():
     mode, *args = sys.argv[1:]
     config = {}
@@ -85,6 +100,9 @@ def main():
     event = data.get('hook_event_name')
     kind = None
     if source == 'codex' and data.get('type') == 'agent-turn-complete':
+        # Logging and the original notify have already run; only our alert is suppressed.
+        if heartbeat(data):
+            return
         kind = 'codex_complete'
     elif event == 'Stop':
         kind = 'claude_complete'

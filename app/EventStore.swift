@@ -22,6 +22,7 @@ struct Completion {
 // Codex running state is reconciled separately from live lifecycle records.
 final class EventStore {
     let url: URL
+    private let codexOnly: Bool
     var running: [String: Running] = [:]
     var recent: [Completion] = []
     var problem: String?
@@ -38,8 +39,8 @@ final class EventStore {
     private let plain = ISO8601DateFormatter()
     private var finishedTurns: [String: Date] = [:]
 
-    init(url: URL) {
-        self.url = url
+    init(url: URL, codexOnly: Bool = false) {
+        self.url = url; self.codexOnly = codexOnly
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
 
@@ -87,7 +88,7 @@ final class EventStore {
     func reconcileCodex(_ activities: [CodexActivity], problem: String?) {
         codexProblem = problem
         running = running.filter { $0.value.source != "Codex" }
-        for value in activities {
+        for value in activities where !value.isHeartbeat {
             let key = "codex:" + value.session
             clients[key] = value.client
             guard finishedTurns[key + ":" + value.turn] == nil else { continue }
@@ -116,6 +117,7 @@ final class EventStore {
               let payload = record["payload"] as? [String: Any],
               let stamp = record["timestamp"] as? String,
               let time = fractional.date(from: stamp) ?? plain.date(from: stamp) else { return }
+        guard !codexOnly || source == "codex" else { return }
         let cwd = payload["cwd"] as? String ?? ""
         let project = cwd.isEmpty ? "未知项目" : URL(fileURLWithPath: cwd).lastPathComponent
         let event = payload["hook_event_name"] as? String
@@ -186,9 +188,15 @@ final class EventStore {
         }
         guard isClaude || isCodex else { return }
         let inputs = payload["input-messages"] as? [String] ?? []
+        if isCodex && TaskText.isHeartbeatTurn(inputs) { return }
         let summary = isCodex
             ? inputs.last(where: { TaskText.submitted($0) }).flatMap { TaskText.title($0) } ?? TaskText.missing
             : (turnKey ?? key).flatMap { titles[$0] } ?? TaskText.missing
+        // Coalesce turns only within an identified session, never by project.
+        if let session {
+            if recent.contains(where: { $0.source == label && $0.session == session && $0.time > time }) { return }
+            recent.removeAll { $0.source == label && $0.session == session }
+        }
         recent.append(Completion(source: isClaude ? "Claude" : "Codex", session: session, project: project,
                                  time: time, summary: summary))
         recent.sort { $0.time > $1.time }

@@ -192,7 +192,7 @@ def build_app(directory):
     atomic(bundle / 'Contents/Info.plist', plistlib.dumps({
         'CFBundleExecutable': 'AgentBell', 'CFBundleIdentifier': LABEL,
         'CFBundleName': 'AgentBell', 'CFBundlePackageType': 'APPL',
-        'CFBundleShortVersionString': '0.5.0', 'CFBundleVersion': '5',
+        'CFBundleShortVersionString': '0.6.0', 'CFBundleVersion': '6',
         'LSUIElement': True, 'LSMinimumSystemVersion': '13.0',
     }))
     subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(bundle)], check=True)
@@ -321,6 +321,45 @@ def install():
         install_menu(bundle)
 
 
+def upgrade_runtime():
+    """Update an installed app/worker without rewriting either agent's settings."""
+    state = read_json(STATE)
+    if not state.get('active') or not APP.exists() or not AGENT.exists():
+        raise RuntimeError('Runtime upgrade requires an existing installation')
+    with tempfile.TemporaryDirectory(prefix='agentbell-build-') as directory:
+        bundle = build_app(Path(directory))
+        backup = ROOT / 'backups' / datetime.datetime.now().strftime('%Y%m%d-%H%M%S-runtime')
+        backup.mkdir(parents=True, mode=0o700)
+        shutil.copytree(APP, backup / 'AgentBell.app')
+        shutil.copytree(ROOT / 'bin', backup / 'bin')
+        shutil.copy2(STATE, backup / 'install-state.json')
+        for name, path in {**FILES, 'hooks.json': CODEX_HOOKS}.items():
+            if path.exists():
+                shutil.copy2(path, backup / name)
+        try:
+            stop_app()
+            shutil.rmtree(APP)
+            shutil.copytree(bundle, APP)
+            for source in (REPO / 'bin').iterdir():
+                if source.is_file() and source.name.startswith('agentbell-'):
+                    atomic(ROOT / 'bin' / source.name, source.read_bytes(), source)
+            start_app()
+            state['runtime_backup'] = str(backup)
+            atomic(STATE, encoded(state))
+        except Exception:
+            stop_app()
+            if APP.exists():
+                shutil.rmtree(APP)
+            shutil.copytree(backup / 'AgentBell.app', APP)
+            for source in (backup / 'bin').iterdir():
+                if source.is_file():
+                    atomic(ROOT / 'bin' / source.name, source.read_bytes(), source)
+            atomic(STATE, (backup / 'install-state.json').read_bytes())
+            start_app()
+            raise
+        print('Runtime upgraded; agent settings untouched. Backup: ' + str(backup))
+
+
 def uninstall():
     if not STATE.exists() or not read_json(STATE).get('active'):
         print('Not installed; logs and backups retained.')
@@ -356,7 +395,7 @@ def uninstall():
 if __name__ == '__main__':
     os.umask(0o077)
     try:
-        {'install': install, 'uninstall': uninstall}[sys.argv[1]]()
+        {'install': install, 'uninstall': uninstall, 'upgrade-runtime': upgrade_runtime}[sys.argv[1]]()
     except Exception as exc:
         print('AgentBell: ' + str(exc), file=sys.stderr)
         sys.exit(1)

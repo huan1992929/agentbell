@@ -5,6 +5,9 @@ enum TaskText {
     static let missing = "未记录任务提示词"
     static func title(_ prompt: String?) -> String? {
         guard let prompt else { return nil }
+        if prompt.hasPrefix("# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions") {
+            return "Codex 自动生成任务建议"
+        }
         // Claude wraps pasted user input; the wrapper itself is not a title.
         let unwrapped = prompt.replacingOccurrences(of: "</?pasted_content(?:\\s[^>]*)?>", with: "", options: .regularExpression)
         guard let line = unwrapped.split(whereSeparator: \.isNewline).first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) else { return nil }
@@ -12,12 +15,22 @@ enum TaskText {
         if value.hasPrefix("/"), !value.contains(" ") {
             value = URL(fileURLWithPath: value).lastPathComponent
         }
-        guard !value.isEmpty else { return nil }
+        value = value.replacingOccurrences(of: "^(?:#{1,6} |[-*] )", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+        guard !value.isEmpty, !isHeartbeat(value),
+              value.range(of: "^</?[A-Za-z][A-Za-z0-9_-]*(?:\\s[^>]*)?>", options: .regularExpression) == nil else { return nil }
         return String(value.prefix(100)) + (value.count > 100 ? "…" : "")
+    }
+    static func isHeartbeat(_ prompt: String) -> Bool {
+        prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            .range(of: "^<heartbeat(?:\\s[^>]*)?>", options: .regularExpression) != nil
+    }
+    static func isHeartbeatTurn(_ inputs: [String]) -> Bool {
+        inputs.last(where: { submitted($0) || isHeartbeat($0) }).map(isHeartbeat) ?? false
     }
     static func submitted(_ prompt: String) -> Bool {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !text.isEmpty && !["<task-notification>", "<environment_context>", "<recommended_plugins>", "<send_user_message_question_reply>", "<permissions instructions>", "# AGENTS.md instructions"].contains { text.hasPrefix($0) }
+        return !text.isEmpty && !isHeartbeat(text) && !["Files mentioned by the user:", "<in-app-browser-context", "<task-notification>", "<environment_context>", "<recommended_plugins>", "<send_user_message_question_reply>", "<permissions instructions>", "# AGENTS.md instructions"].contains { text.hasPrefix($0) }
     }
 }
 
@@ -31,6 +44,7 @@ enum TaskTime {
     }
     static func completed(_ date: Date, now: Date = Date()) -> String {
         let seconds = now.timeIntervalSince(date)
+        if Calendar.current.isDate(date, inSameDayAs: now.addingTimeInterval(-86400)), seconds >= 3600 { return "昨天" }
         return seconds < 60 ? "刚刚" : duration(seconds) + "前"
     }
     static func elapsed(_ date: Date, now: Date = Date()) -> String {
@@ -48,11 +62,18 @@ struct CodexUsage {
             if minutes % 60 == 0 { return "\(minutes / 60)小时" }
             return "\(minutes)分钟"
         }
+        var used: String {
+            if percent > 0 && percent < 1 { return "<1%" }
+            return (percent == percent.rounded() ? String(format: "%.0f", percent) : String(format: "%.1f", percent)) + "%"
+        }
+        func resetLabel(now: Date = Date()) -> String {
+            let seconds = reset.timeIntervalSince(now)
+            return seconds > 0 ? TaskTime.duration(seconds) + "后重置" : "等待新额度"
+        }
         func label(now: Date) -> String {
-            let used = percent == percent.rounded() ? String(format: "%.0f", percent) : String(format: "%.1f", percent)
             let remaining = reset.timeIntervalSince(now)
             let resetText = remaining > 0 ? TaskTime.duration(remaining) + "后重置" : "待刷新"
-            return "\(name) 已用\(used)% · \(resetText)"
+            return "\(name) 已用\(used) · \(resetText)"
         }
     }
     let time: Date
@@ -67,6 +88,10 @@ struct CodexUsage {
                   let epoch = value["resets_at"] as? Double, epoch.isFinite else { return nil }
             return Window(percent: percent, minutes: minutes, reset: Date(timeIntervalSince1970: epoch))
         }
+    }
+    func freshness(now: Date = Date()) -> String {
+        if windows.contains(where: { $0.reset <= now }) { return "等待更新 · 上次 " + TaskTime.completed(time, now: now) }
+        return now.timeIntervalSince(time) > 900 ? "缓存 · " + TaskTime.completed(time, now: now) : "更新于 " + TaskTime.completed(time, now: now)
     }
     func label(now: Date = Date()) -> String {
         windows.isEmpty ? "Codex 用量不可用" : "Codex  " + windows.map { $0.label(now: now) }.joined(separator: "  /  ")

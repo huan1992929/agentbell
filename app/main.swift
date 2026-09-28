@@ -1,7 +1,7 @@
 import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = EventStore(url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".agentbell/logs/events.jsonl"))
+    private let store = EventStore(url: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".agentbell/logs/events.jsonl"), codexOnly: true)
     private var item: NSStatusItem!
     private var island: IslandController!
     private var timer: Timer?
@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
             NSApp.terminate(nil); return
         }
-        store.poll(); store.reconcileClaudeApp()
+        store.poll()
         island = IslandController(store: store)
         codex.start { [weak self] activities, problem, usage in
             guard let self else { return }
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quit.target = self; menu.addItem(quit); item.menu = menu
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.store.poll(); self.store.reconcileClaudeApp(); self.island.refresh()
+            self.store.poll(); self.island.refresh()
             self.item.button?.title = self.store.running.isEmpty ? "" : " \(self.store.running.count)"
         }
         self.timer = timer; RunLoop.main.add(timer, forMode: .common)
